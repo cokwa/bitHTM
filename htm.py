@@ -40,31 +40,48 @@ class SpatialPooler:
         self.permanence[self.active] += input * (self.permanence_increment - self.permanence_decrement) + self.permanence_decrement
         
 class TemporalMemory:
-    def __init__(self, columns, cells):
+    def __init__(self, columns, active_columns, cells):
         self.columns = columns
+        self.active_columns = active_columns
         self.cells = cells
+
+        self.segment_activation_threshold = 15
+
+        self.permanence_initial = 0.0
+        self.permanence_threshold = 0.5
+        self.permanence_increment = 0.1
+        self.permanence_decrement = 0.2
+
+        self.active_column_cell_index = np.arange(self.active_columns * self.cells).reshape(self.active_columns, self.cells) % self.cells
 
         self.cell_active = np.zeros((columns, cells), dtype=np.bool)
         self.cell_predictive = np.zeros_like(self.cell_active)
+        self.cell_winner = np.zeros_like(self.cell_active)
 
+        self.segments = np.zeros((columns, cells), np.uint)
         self.segment_activation = np.zeros((columns, cells, 0), np.uint)
 
-        self.synapse_target = np.zeros((columns, cells, 0), np.uint)
-        self.synapse_permanence = np.zeros((columns, cells, 0), np.float32)
+        self.synapses = np.zeros((columns, cells, 0), np.uint)
+        self.synapse_target = np.zeros((columns, cells, 0, 0), np.uint)
+        self.synapse_permanence = np.zeros((columns, cells, 0, 0), np.float32)
 
     def run(self, active_column):
         self.cell_active.fill(False)
 
         active_column_cell_predictive = self.cell_predictive[active_column]
+        bursting = (np.count_nonzero(active_column_cell_predictive, axis=1) == 0)[:, None]
+        self.cell_active[active_column] = bursting | active_column_cell_predictive
 
-        bursting = np.count_nonzero(active_column_cell_predictive, axis=1) == 0
+        synapse_target_column = self.synapse_target // self.cells
+        synapse_target_cell = self.synapse_target % self.cells
+        target_cell_active = self.cell_active[(synapse_target_column, synapse_target_cell)]
+
+        synapse_weight = self.synapse_permanence > self.permanence_threshold
+        self.segment_activation = np.count_nonzero(target_cell_active & synapse_weight, axis=3)
+        self.cell_predictive = np.any(self.segment_activation > self.segment_activation_threshold, axis=2)
         
-        self.cell_active[active_column] = np.expand_dims(bursting, axis=1) | active_column_cell_predictive
-
-        self.cell_predictive.fill(False)
-
-        active_synapse_target = self.synapse_target[active_column]
-        active_synapse_permanence = self.synapse_permanence[active_column]
+        cell_least_used = np.argmin(self.segments[active_column], axis=1)[:, None] == self.active_column_cell_index
+        self.cell_winner[active_column] = (cell_least_used & ~bursting) | active_column_cell_predictive
 
 class HierarchicalTemporalMemory:
     def __init__(self, input_size, columns, cells, active_columns=None):
@@ -72,7 +89,7 @@ class HierarchicalTemporalMemory:
             active_columns = int(columns * 0.02)
 
         self.spatial_pooler = SpatialPooler(input_size, columns, active_columns)
-        self.temporal_memory = TemporalMemory(columns, cells)
+        self.temporal_memory = TemporalMemory(columns, active_columns, cells)
 
     def run(self, input):
         self.spatial_pooler.run(input)

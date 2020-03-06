@@ -37,7 +37,7 @@ class SpatialPooler:
         self.duty_cycle[self.active] += 1.0 - self.duty_cycle_momentum
 
         # not canon
-        self.permanence[self.active] += input * (self.permanence_increment - self.permanence_decrement) + self.permanence_decrement
+        self.permanence[self.active] += input * (self.permanence_increment + self.permanence_decrement) - self.permanence_decrement
         
 class TemporalMemory:
     def __init__(self, columns, active_columns, cells):
@@ -45,13 +45,16 @@ class TemporalMemory:
         self.active_columns = active_columns
         self.cells = cells
 
-        self.segment_activation_threshold = 15
-        self.segment_potential_threshold = 15
+        self.segment_activation_threshold = 10
+        self.segment_potential_threshold = 10
 
         self.permanence_initial = 0.0
         self.permanence_threshold = 0.5
         self.permanence_increment = 0.1
         self.permanence_decrement = 0.2
+        self.permanence_punishment = 0.05
+
+        self.cell_index = np.arange(self.cells).reshape(1, self.cells)
 
         self.active_column_cell_index = np.arange(self.active_columns * self.cells).reshape(self.active_columns, self.cells) % self.cells
 
@@ -60,6 +63,7 @@ class TemporalMemory:
         self.cell_winner = np.zeros_like(self.cell_active)
 
         self.segments = np.zeros((self.columns, self.cells), dtype=np.long)
+        self.segment_index = np.zeros((1, 1, 1), dtype=np.uint)
         self.active_column_segment_index = np.zeros((self.active_columns, self.cells, 1), dtype=np.uint)
         self.segment_activation = np.zeros((self.columns, self.cells, 1), dtype=np.uint)
         self.segment_potential = np.zeros_like(self.segment_activation)
@@ -70,30 +74,25 @@ class TemporalMemory:
         self.synapse_target = np.zeros((self.columns, self.cells, 1, 0), dtype=np.uint)
         self.synapse_permanence = np.zeros((self.columns, self.cells, 1, 0), dtype=np.float32)
 
-    def run(self, active_column):
-        self.cell_active.fill(False)
+    def run(self, column_activation):
+        cell_column_active = column_activation[:, None]
+        cell_column_bursting = ~np.any(self.cell_predictive, axis=1)[:, None]
+        self.cell_active = (cell_column_bursting | self.cell_predictive) & cell_column_active
 
-        active_column_cell_predictive = self.cell_predictive[active_column]
-        bursting = ~np.any(active_column_cell_predictive, axis=1)[:, None]
-        self.cell_active[active_column] = bursting | active_column_cell_predictive
+        cell_least_used = np.argmin(self.segments, axis=1)[:, None] == self.cell_index
+        self.cell_winner = ((cell_least_used & cell_column_bursting) | self.cell_predictive) & cell_column_active
         
-        active_column_segments = self.segments[active_column]
-        active_column_segment_matching = self.segment_matching[active_column]
+        cell_new_segment = ~np.any(self.segment_matching, axis=(1, 2))[:, None] & cell_least_used & cell_column_active
+        segment_new = cell_new_segment[:, :, None] & (self.segments[:, :, None] == self.segment_index)
 
-        least_used_cell = np.argmin(active_column_segments, axis=1)[:, None] == self.active_column_cell_index
-        self.cell_winner[active_column] = (least_used_cell & bursting) | active_column_cell_predictive
+        segment_best_matching = np.argmax(self.segment_potential, axis=2)[:, :, None] == self.segment_index
+        segment_learning = (self.segment_active | (self.segment_matching & segment_best_matching) | segment_new) & column_activation[:, None, None]
 
-        cell_new_segment = ~np.any(active_column_segment_matching, axis=(1, 2))[:, None] & least_used_cell
-        segment_new = cell_new_segment[:, :, None] & (active_column_segments[:, :, None] == self.active_column_segment_index)
-        self.segments[active_column] += cell_new_segment
-
-        max_segments = np.max(self.segments[active_column])
+        self.segments += cell_new_segment
+        
+        max_segments = np.max(self.segments)
         if max_segments >= self.synapses.shape[2]:
             self.reserve_segment(2 ** int(np.ceil(np.log2(max_segments + 1))))
-
-        segment_learning = active_column_segment_matching | segment_new
-
-        #print(segment_new)
 
         synapse_target_column = self.synapse_target // self.cells
         synapse_target_cell = self.synapse_target % self.cells
@@ -108,6 +107,8 @@ class TemporalMemory:
         self.cell_predictive = np.any(self.segment_active, axis=2)
 
     def reserve_segment(self, capacity):
+        self.segment_index = np.arange(capacity).reshape(1, 1, capacity)
+
         self.active_column_segment_index = np.arange(self.active_columns * self.cells * capacity).reshape(self.active_columns, self.cells, capacity) % capacity
 
         new_synapses = np.zeros((self.columns, self.cells, capacity), dtype=np.long)
@@ -118,7 +119,7 @@ class TemporalMemory:
         new_synapse_target[:, :, :self.synapse_target.shape[2], :] = self.synapse_target
         self.synapse_target = new_synapse_target
 
-        new_synapse_permanence = np.zeros((self.columns, self.cells, capacity, self.synapse_permanence.shape[3]), dtype=np.uint)
+        new_synapse_permanence = np.zeros((self.columns, self.cells, capacity, self.synapse_permanence.shape[3]), dtype=np.float32)
         new_synapse_permanence[:, :, :self.synapse_permanence.shape[2], :] = self.synapse_permanence
         self.synapse_permanence = new_synapse_permanence
 
@@ -132,7 +133,7 @@ class HierarchicalTemporalMemory:
 
     def run(self, input):
         self.spatial_pooler.run(input)
-        self.temporal_memory.run(self.spatial_pooler.active)
+        self.temporal_memory.run(self.spatial_pooler.activation)
 
 if __name__ == '__main__':
     input = np.random.randn(10, 10) > 0

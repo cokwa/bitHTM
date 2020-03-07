@@ -8,6 +8,7 @@ class SpatialPooler:
 
         self.sparsity = self.active_columns / self.columns
 
+        self.boosting_intensity = 0.1
         self.duty_cycle_momentum = 0.99
 
         self.permanence_threshold = 0.0
@@ -26,7 +27,7 @@ class SpatialPooler:
         weight = self.permanence > self.permanence_threshold
         self.overlaps = np.count_nonzero(input & weight, axis=1)
         
-        boosting = np.exp(-self.duty_cycle / self.sparsity)
+        boosting = np.exp(self.boosting_intensity * -self.duty_cycle / self.sparsity)
         sorted = (boosting * self.overlaps).argsort()
         self.active = sorted[-self.active_columns:]
 
@@ -46,17 +47,17 @@ class TemporalMemory:
         self.columns = columns
         self.cells = cells
 
-        self.segment_activation_threshold = 1 #10
-        self.segment_potential_threshold = 1 #10
+        self.segment_activation_threshold = 10
+        self.segment_potential_threshold = 10
 
         self.synapse_sample_size = 20
 
         self.permanence_invalid = -1.0
         self.permanence_initial = 0.01
         self.permanence_threshold = 0.5
-        self.permanence_increment = 0.1
-        self.permanence_decrement = 0.2
-        self.permanence_punishment = 0.05
+        self.permanence_increment = 0.3
+        self.permanence_decrement = 0.4
+        self.permanence_punishment = 0.1
 
         self.cell_index = np.arange(self.cells).reshape(1, self.cells)
         self.cell_active = np.zeros((self.columns, self.cells), dtype=np.bool)
@@ -106,52 +107,53 @@ class TemporalMemory:
 
         synapse_target_column = self.synapse_target // self.cells
         synapse_target_cell = self.synapse_target % self.cells
-        synapse_target_active = self.cell_active[(synapse_target_column, synapse_target_cell)]
-        synapse_target_prev_active = self.cell_prev_active[(synapse_target_column, synapse_target_cell)]
-
         synapse_valid = self.synapse_permanence >= 0.0
+        synapse_target_active = self.cell_active[(synapse_target_column, synapse_target_cell)] & synapse_valid
+        synapse_target_prev_active = self.cell_prev_active[(synapse_target_column, synapse_target_cell)] & synapse_valid
 
         synapse_learning = self.segment_learning[:, :, :, None]
         synapse_punished = (self.cell_predictive & ~cell_column_active)[:, :, None, None] & synapse_target_prev_active
-        learning = synapse_learning * (synapse_target_prev_active * (self.permanence_increment + self.permanence_decrement) - self.permanence_decrement)
-        punishment = synapse_punished * -self.permanence_punishment
+        learning = synapse_learning * (np.float32(synapse_target_prev_active) * (self.permanence_increment + self.permanence_decrement) - self.permanence_decrement)
+        punishment = np.float32(synapse_punished) * -self.permanence_punishment
         self.synapse_permanence += learning + punishment
 
-        new_synapses = np.max((self.synapse_sample_size - self.segment_matching)[self.segment_learning], 0)
+        new_synapses = np.max(self.synapse_sample_size - self.segment_matching[self.segment_learning], 0)
 
         synapse_weight = self.synapse_permanence > self.permanence_threshold
-        synapse_valid = self.synapse_permanence >= 0.0
         self.segment_activation = np.count_nonzero(synapse_target_active & synapse_weight, axis=3)
-        self.segment_potential = np.count_nonzero(synapse_target_active & synapse_valid, axis=3)
+        self.segment_potential = np.count_nonzero(synapse_target_active, axis=3)
         self.segment_active = self.segment_activation >= self.segment_activation_threshold
         self.segment_matching = self.segment_potential >= self.segment_potential_threshold
         self.cell_predictive = np.any(self.segment_active, axis=2)
 
-        cur_synapse_target = self.synapse_target[self.segment_learning]
+        cur_synapse_valid = synapse_valid[self.segment_learning]
+        cur_synapse_target = self.synapse_target[self.segment_learning][cur_synapse_valid]
         cur_synapse_target_column = cur_synapse_target // self.cells
         cur_synapse_target_cell = cur_synapse_target % self.cells
-        cur_synapse_valid = synapse_valid[self.segment_learning]
-        cell_available = np.ones((cur_synapse_target.shape[0], self.columns, self.cells), dtype=np.bool)
-        cell_available[(np.arange(cur_synapse_target.shape[0])[:, None], cur_synapse_target_column, cur_synapse_target_cell)] = False
+        cell_available = np.ones((np.count_nonzero(self.segment_learning), self.columns, self.cells), dtype=np.bool)
+        cell_available[(np.nonzero(cur_synapse_valid)[0], cur_synapse_target_column, cur_synapse_target_cell)] = False
         cell_available_winner = self.cell_prev_winner[None, :, :] & cell_available
 
         new_synapses = np.minimum(new_synapses, np.count_nonzero(cell_available_winner, axis=(1, 2)))
 
         cur_synapses = self.synapses[self.segment_learning]
         cur_synapses_start = np.max(cur_synapses)
-        cur_synapses_end = np.max(cur_synapses + new_synapses)
+        cur_synapses_end = cur_synapses_start + np.max(new_synapses)
         if cur_synapses_end > self.synapse_capacity:
             self.reserve_synapse(TemporalMemory.get_exponential_capacity(cur_synapses_end))
 
+        self.synapses[self.segment_learning] = cur_synapses_end
+
         # HACK: very inefficient, just find a better way to pick valid indices while retaining the shape
         new_synapse_target = np.arange(np.prod(cell_available_winner.shape)).reshape(cell_available_winner.shape[0], -1) % np.prod(cell_available_winner.shape[1:])
+        np.random.shuffle(new_synapse_target)
         new_synapse_target.reshape(*cell_available_winner.shape)[~cell_available_winner] = -1
         new_synapse_target[:, ::-1].sort()
         new_synapse_target[new_synapse_target < 0] = 0
         
-        self.synapse_target[self.segment_learning, cur_synapses_start:cur_synapses_end] = new_synapse_target[:, :cur_synapses_end]
+        self.synapse_target[self.segment_learning, cur_synapses_start:cur_synapses_end] = new_synapse_target[:, :cur_synapses_end - cur_synapses_start]
         self.synapse_permanence[self.segment_learning, cur_synapses_start:cur_synapses_end] = (self.permanence_initial - self.permanence_invalid) + self.permanence_invalid
-
+        
     @staticmethod
     def get_exponential_capacity(capacity):
         return 2 ** int(np.ceil(np.log2(capacity)))
@@ -207,25 +209,15 @@ class HierarchicalTemporalMemory:
 
 if __name__ == '__main__':
     input = np.random.randn(10, 1000) > 1.0
-    htm = HierarchicalTemporalMemory(1000, 10, 4, active_columns=1)
+    htm = HierarchicalTemporalMemory(1000, 2048, 32)
 
     import time
 
     prev_time = time.time()
 
-    for epoch in range(10):
+    for epoch in range(100):
         for i in range(len(input)):
-            print(i, ':', '-' * htm.spatial_pooler.columns)#, end=' ')
             htm.run(input[i])
-            for k in range(htm.temporal_memory.cells):
-                for j in range(htm.spatial_pooler.columns):
-                    if htm.temporal_memory.cell_predictive[j, k]:
-                        print('#', end='')
-                    elif htm.temporal_memory.cell_active[j, k]:
-                        print('o', end='')
-                    else:
-                        print(' ', end='')
-                print()
-            #print()
+            print('epoch {}, pattern {}: correctly predicted columns: {}'.format(epoch, i, np.count_nonzero(htm.temporal_memory.cell_active & ~np.all(htm.temporal_memory.cell_active, axis=1)[:, None])))
 
     print('{}s'.format(time.time() - prev_time))

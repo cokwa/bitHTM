@@ -135,41 +135,42 @@ class TemporalMemory:
             
             candidate_cell_synapse_segment = self.synapse_segment.reshape(self.columns * self.cells, -1)[self.prev_winner_cell]
             segment_cell_candidate = np.all(learning_segment[:, None, None] != candidate_cell_synapse_segment[None, :, :], axis=2)
-            print(np.sum(~segment_cell_candidate, axis=1))
-            print(self.segment_potential[learning_segment])
             segment_new_synapses = np.maximum(self.synapse_sample_size - np.sum(~segment_cell_candidate, axis=1), 0)
-            random_connect = np.tile(np.arange(segment_cell_candidate.shape[1]), (segment_cell_candidate.shape[0], 1)) < segment_new_synapses[:, None]
-            np.apply_along_axis(np.random.shuffle, 1, random_connect)
-            segment_cell_candidate &= random_connect
-            candidate_cell_new_synapse = np.nonzero(segment_cell_candidate.T)
+            
+            max_new_synapses = np.max(segment_new_synapses)
+            if max_new_synapses > 0:
+                random_connect = np.tile(np.arange(segment_cell_candidate.shape[1]), (segment_cell_candidate.shape[0], 1)) < segment_new_synapses[:, None]
+                np.apply_along_axis(np.random.shuffle, 1, random_connect)
+                segment_cell_candidate &= random_connect
+                
+                candidate_cell_new_synapse = np.nonzero(segment_cell_candidate.T)
+                if len(candidate_cell_new_synapse[0]) > 0:
+                    cell_synapses = self.cell_synapses.reshape(-1)[self.prev_winner_cell] + np.sum(segment_cell_candidate, axis=0)
+                    synapses = np.max(cell_synapses)
+                    if synapses > self.synapses_capacity:
+                        self.synapses_capacity = TemporalMemory.get_exponential_capacity(synapses)
+                        
+                        synapse_segment = np.full((self.columns, self.cells, self.synapses_capacity), -1, dtype=np.long)
+                        synapse_segment[:, :, :self.synapses] = self.synapse_segment[:, :, :self.synapses]
+                        self.synapse_segment = synapse_segment
 
-            if len(candidate_cell_new_synapse[0]) > 0:
-                cell_synapses = self.cell_synapses.reshape(-1)[self.prev_winner_cell] + np.sum(segment_cell_candidate, axis=0)
-                synapses = np.max(cell_synapses)
-                if synapses > self.synapses_capacity:
-                    self.synapses_capacity = TemporalMemory.get_exponential_capacity(synapses)
-                    
-                    synapse_segment = np.full((self.columns, self.cells, self.synapses_capacity), -1, dtype=np.long)
-                    synapse_segment[:, :, :self.synapses] = self.synapse_segment[:, :, :self.synapses]
-                    self.synapse_segment = synapse_segment
+                        synapse_permanence = np.full(self.synapse_segment.shape, self.permanence_initial, dtype=np.float32)
+                        synapse_permanence[:, :, :self.synapses] = self.synapse_permanence[:, :, :self.synapses]
+                        self.synapse_permanence = synapse_permanence
 
-                    synapse_permanence = np.full(self.synapse_segment.shape, self.permanence_initial, dtype=np.float32)
-                    synapse_permanence[:, :, :self.synapses] = self.synapse_permanence[:, :, :self.synapses]
-                    self.synapse_permanence = synapse_permanence
+                    synapse_segment_cell = self.prev_winner_cell[candidate_cell_new_synapse[0]]
+                    candidate_cell, synapse_segment_synapses = np.unique(synapse_segment_cell, return_counts=True)
+                    synapse_segment_synapse_offset = np.argmin(np.where(candidate_cell[:, None] == synapse_segment_cell[None, :], np.arange(len(synapse_segment_cell)), np.array([len(synapse_segment_cell)], dtype=np.long)), axis=1)
+                    max_segment_synapses = np.max(synapse_segment_synapses)
+                    masked_synapse_index = np.arange(max_segment_synapses)
+                    valid_synapse_index = np.nonzero(masked_synapse_index[None, :] < synapse_segment_synapses[:, None])
+                    synapse_segment_synapse_index = np.empty_like(candidate_cell_new_synapse[0])
+                    synapse_segment_synapse_index[(synapse_segment_synapse_offset[:, None] + masked_synapse_index[None, :])[valid_synapse_index]] = masked_synapse_index[valid_synapse_index[1]]
 
-                synapse_segment_cell = self.prev_winner_cell[candidate_cell_new_synapse[0]]
-                candidate_cell, synapse_segment_synapses = np.unique(synapse_segment_cell, return_counts=True)
-                synapse_segment_synapse_offset = np.argmin(np.where(candidate_cell[:, None] == synapse_segment_cell[None, :], np.arange(len(synapse_segment_cell)), np.array([len(synapse_segment_cell)], dtype=np.long)), axis=1)
-                max_segment_synapses = np.max(synapse_segment_synapses)
-                masked_synapse_index = np.arange(max_segment_synapses)
-                valid_synapse_index = np.nonzero(masked_synapse_index[None, :] < synapse_segment_synapses[:, None])
-                synapse_segment_synapse_index = np.empty_like(candidate_cell_new_synapse[0])
-                synapse_segment_synapse_index[(synapse_segment_synapse_offset[:, None] + masked_synapse_index[None, :])[valid_synapse_index]] = masked_synapse_index[valid_synapse_index[1]]
-
-                synapse_segment_synapse = self.cell_synapses.reshape(-1)[synapse_segment_cell] + synapse_segment_synapse_index
-                self.synapse_segment.reshape(self.columns * self.cells, -1)[(synapse_segment_cell, synapse_segment_synapse)] = learning_segment[candidate_cell_new_synapse[1]]
-                self.cell_synapses.reshape(-1)[self.prev_winner_cell] = cell_synapses
-                self.synapses = synapses
+                    synapse_segment_synapse = self.cell_synapses.reshape(-1)[synapse_segment_cell] + synapse_segment_synapse_index
+                    self.synapse_segment.reshape(self.columns * self.cells, -1)[(synapse_segment_cell, synapse_segment_synapse)] = learning_segment[candidate_cell_new_synapse[1]]
+                    self.cell_synapses.reshape(-1)[self.prev_winner_cell] = cell_synapses
+                    self.synapses = synapses
 
         active_cell = self.get_active_column_cell_index(active_column, np.nonzero(cell_active))
         active_synapse_segment = self.synapse_segment.reshape(self.columns * self.cells, -1)[active_cell].reshape(-1)

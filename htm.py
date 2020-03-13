@@ -110,8 +110,8 @@ class TemporalMemory:
         prev_active_synapse_segment = self.synapse_segment.reshape(self.columns * self.cells, -1)[self.prev_active_cell]
         prev_active_synapse_learning = np.any(prev_active_synapse_segment[:, :, None] == learning_segment[None, None, :], axis=2)
         prev_active_synapse_punished = np.any(prev_active_synapse_segment[:, :, None] == incorrect_segment[None, None, :], axis=2)
-        learning = np.where(prev_active_synapse_learning, np.array([self.permanence_increment]), np.array([self.permanence_decrement]))
-        punishment = np.where(prev_active_synapse_punished, np.array([self.permanence_punishment]), np.array([0.0]))
+        learning = np.where(prev_active_synapse_learning, np.array([self.permanence_increment]), np.array([-self.permanence_decrement]))
+        punishment = np.where(prev_active_synapse_punished, np.array([-self.permanence_punishment]), np.array([0.0]))
         self.synapse_permanence.reshape(self.columns * self.cells, -1)[self.prev_active_cell] += learning + punishment
 
         self.winner_cell = self.get_active_column_cell_index(active_column, np.nonzero(cell_winner))

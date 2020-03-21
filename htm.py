@@ -99,6 +99,9 @@ class TemporalMemory:
         self.segment_synapse_permanence[learning_segment] += self.cell_active.reshape(-1)[learning_segment_synapse_cell] * (self.permanence_increment + self.permanence_decrement) - self.permanence_decrement
         self.segment_synapse_permanence.reshape(-1, self.segment_capacity, self.segment_synapse_capacity)[punished_segment] -= self.cell_active.reshape(-1)[punished_segment_synapse_cell] * self.permanence_punishment
 
+        cell_winner = cell_predictive.copy()
+        cell_winner[(segment_growing_column, segment_growing_cell)] = True
+
         segment_growing_column = active_column[segment_growing_column]
         cell_new_segment = self.cell_segments[(segment_growing_column, segment_growing_cell)]
         learning_segment = ( np.concatenate([learning_segment[0], segment_growing_column]),
@@ -159,6 +162,8 @@ class TemporalMemory:
         self.segment_matching = self.segment_potential >= self.segment_matching_threshold
         self.cell_predictive = np.any(self.segment_activation, axis=2)
 
+        self.prev_winner_cell = np.nonzero(cell_winner)
+        self.prev_winner_cell = (active_column[self.prev_winner_cell[0]], self.prev_winner_cell[1])
         self.prev_target_cell = target_cell
 
     @staticmethod

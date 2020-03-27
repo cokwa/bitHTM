@@ -92,11 +92,14 @@ class TemporalMemory:
         learning_segment = active_column[learning_segment[0]] * (self.cells * self.segment_capacity) + learning_segment[1] * self.segment_capacity + learning_segment[2]
         punished_segment = self.prev_target_cell[punished_segment[0]] * self.segment_capacity + punished_segment[1]
         
-        # TODO: what about invalid synapses?
         learning_segment_synapse_cell = self.segment_synapse_cell.reshape(-1, self.segment_synapse_capacity)[learning_segment]
         punished_segment_synapse_cell = self.segment_synapse_cell.reshape(-1, self.segment_synapse_capacity)[punished_segment]
-        self.segment_synapse_permanence.reshape(-1, self.segment_synapse_capacity)[learning_segment] += self.cell_active.reshape(-1)[learning_segment_synapse_cell] * (self.permanence_increment + self.permanence_decrement) - self.permanence_decrement
-        self.segment_synapse_permanence.reshape(-1, self.segment_synapse_capacity)[punished_segment] -= self.cell_active.reshape(-1)[punished_segment_synapse_cell] * self.permanence_punishment
+        learning_segment_synapse_cell_valid = np.nonzero(learning_segment_synapse_cell >= 0)
+        punished_segment_synapse_cell_valid = np.nonzero(punished_segment_synapse_cell >= 0)
+        learning_segment_synapse_cell = learning_segment_synapse_cell[learning_segment_synapse_cell_valid]
+        punished_segment_synapse_cell = punished_segment_synapse_cell[punished_segment_synapse_cell_valid]
+        self.segment_synapse_permanence.reshape(-1, self.segment_synapse_capacity)[(learning_segment[learning_segment_synapse_cell[0]], learning_segment_synapse_cell)] += self.cell_active.reshape(-1)[learning_segment_synapse_cell] * (self.permanence_increment + self.permanence_decrement) - self.permanence_decrement
+        self.segment_synapse_permanence.reshape(-1, self.segment_synapse_capacity)[(punished_segment[punished_segment_synapse_cell[0]], punished_segment_synapse_cell)] -= self.cell_active.reshape(-1)[punished_segment_synapse_cell] * self.permanence_punishment
 
         growing_segment_column = np.nonzero(column_grow_segment)[0]
         growing_segment_cell = column_least_used_cell[growing_segment_column]
@@ -221,7 +224,9 @@ class TemporalMemory:
         active_cell = (active_column[active_cell[0]], active_cell[1])
 
         cell_targeted = np.zeros(self.columns * self.cells, dtype=np.bool)
-        cell_targeted[self.cell_synapse_cell[active_cell]] = True # TODO: what about invalid synapses? - easy
+        active_cell_synapse_cell = self.cell_synapse_cell[active_cell]
+        active_cell_synapse_cell = active_cell_synapse_cell[active_cell_synapse_cell >= 0]
+        cell_targeted[active_cell_synapse_cell] = True
         target_cell = np.nonzero(cell_targeted)[0]
         
         segment_synapse_cell_active = self.cell_active.reshape(-1)[self.segment_synapse_cell.reshape(-1, self.segment_capacity, self.segment_synapse_capacity)[target_cell]]

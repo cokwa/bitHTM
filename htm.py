@@ -8,7 +8,7 @@ class SpatialPooler:
 
         self.sparsity = self.active_columns / self.columns
 
-        self.boosting_intensity = 0.1
+        self.boosting_intensity = 0.5
         self.duty_cycle_inertia = 0.99
 
         self.permanence_threshold = 0.0
@@ -62,7 +62,7 @@ class TemporalMemory:
 
         self.segment_capacity = 1
         self.segment_index = np.arange(self.cells * self.segment_capacity, dtype=np.long).reshape(1, self.cells, self.segment_capacity)
-        self.segment_activation = np.zeros((self.columns, self.cells, self.segment_capacity), dtype=np.int)
+        self.segment_activation = np.zeros((self.columns, self.cells, self.segment_capacity), dtype=np.long)
         self.segment_potential = np.zeros_like(self.segment_activation)
         self.segment_active = np.zeros((self.columns, self.cells, self.segment_capacity), dtype=np.bool)
         self.segment_matching = np.zeros_like(self.segment_active)
@@ -87,19 +87,20 @@ class TemporalMemory:
         column_least_used_cell = np.argmin(self.cell_segments[active_column], axis=1)
         column_grow_segment = segment_potential[(np.arange(len(active_column), dtype=np.long), column_best_matching_segment)] == 0
         segment_learning = self.segment_active[active_column] | ((self.segment_index == column_best_matching_segment[:, None, None]) & (column_bursting & ~column_grow_segment)[:, None, None])
+
         learning_segment = np.nonzero(segment_learning)
-        punished_segment = np.nonzero(self.segment_active.reshape(-1, self.segment_capacity)[self.prev_target_cell])
         learning_segment = active_column[learning_segment[0]] * (self.cells * self.segment_capacity) + learning_segment[1] * self.segment_capacity + learning_segment[2]
-        punished_segment = self.prev_target_cell[punished_segment[0]] * self.segment_capacity + punished_segment[1]
-        
         learning_segment_synapse_cell = self.segment_synapse_cell.reshape(-1, self.segment_synapse_capacity)[learning_segment]
-        punished_segment_synapse_cell = self.segment_synapse_cell.reshape(-1, self.segment_synapse_capacity)[punished_segment]
         learning_segment_synapse_cell_valid = np.nonzero(learning_segment_synapse_cell >= 0)
-        punished_segment_synapse_cell_valid = np.nonzero(punished_segment_synapse_cell >= 0)
         learning_segment_synapse_cell = learning_segment_synapse_cell[learning_segment_synapse_cell_valid]
+        self.segment_synapse_permanence.reshape(-1, self.segment_synapse_capacity)[(learning_segment[learning_segment_synapse_cell_valid[0]], learning_segment_synapse_cell_valid[1])] += self.cell_active.reshape(-1)[learning_segment_synapse_cell] * (self.permanence_increment + self.permanence_decrement) - self.permanence_decrement
+        
+        punished_segment = np.nonzero(self.segment_active.reshape(-1, self.segment_capacity)[self.prev_target_cell])
+        punished_segment = self.prev_target_cell[punished_segment[0]] * self.segment_capacity + punished_segment[1]
+        punished_segment_synapse_cell = self.segment_synapse_cell.reshape(-1, self.segment_synapse_capacity)[punished_segment]
+        punished_segment_synapse_cell_valid = np.nonzero(punished_segment_synapse_cell >= 0)
         punished_segment_synapse_cell = punished_segment_synapse_cell[punished_segment_synapse_cell_valid]
-        self.segment_synapse_permanence.reshape(-1, self.segment_synapse_capacity)[(learning_segment[learning_segment_synapse_cell[0]], learning_segment_synapse_cell)] += self.cell_active.reshape(-1)[learning_segment_synapse_cell] * (self.permanence_increment + self.permanence_decrement) - self.permanence_decrement
-        self.segment_synapse_permanence.reshape(-1, self.segment_synapse_capacity)[(punished_segment[punished_segment_synapse_cell[0]], punished_segment_synapse_cell)] -= self.cell_active.reshape(-1)[punished_segment_synapse_cell] * self.permanence_punishment
+        self.segment_synapse_permanence.reshape(-1, self.segment_synapse_capacity)[(punished_segment[punished_segment_synapse_cell_valid[0]], punished_segment_synapse_cell_valid[1])] -= self.cell_active.reshape(-1)[punished_segment_synapse_cell] * self.permanence_punishment
 
         growing_segment_column = np.nonzero(column_grow_segment)[0]
         growing_segment_cell = column_least_used_cell[growing_segment_column]
@@ -116,7 +117,7 @@ class TemporalMemory:
             if max_cell_segments > self.segment_capacity:
                 segment_capacity = max_cell_segments
                 self.segment_index = np.arange(self.cells * segment_capacity, dtype=np.long).reshape(1, self.cells, segment_capacity)
-                self.segment_activation = np.zeros((self.columns, self.cells, segment_capacity), dtype=np.int)
+                self.segment_activation = np.zeros((self.columns, self.cells, segment_capacity), dtype=np.long)
                 self.segment_potential = np.zeros_like(self.segment_activation)
 
                 segment_synapses = np.zeros((self.columns, self.cells, segment_capacity), dtype=np.long)

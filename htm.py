@@ -8,7 +8,7 @@ class SpatialPooler:
 
         self.sparsity = self.active_columns / self.columns
 
-        self.boosting_intensity = 0.5
+        self.boosting_intensity = 0.3
         self.duty_cycle_inertia = 0.99
 
         self.permanence_threshold = 0.0
@@ -76,7 +76,7 @@ class TemporalMemory:
         self.segment_synapse_permanence = np.zeros((self.columns, self.cells, self.segment_capacity, self.segment_synapse_capacity), dtype=np.float32)
 
         self.prev_winner_cell = np.zeros(0, dtype=np.long)
-        self.prev_target_cell = np.zeros(0, dtype=np.long)
+        self.prev_target_segment = np.zeros(0, dtype=np.long)
 
     def run(self, active_column):
         cell_predictive = self.cell_predictive[active_column]
@@ -95,8 +95,7 @@ class TemporalMemory:
         learning_segment_synapse_cell = learning_segment_synapse_cell[learning_segment_synapse_cell_valid]
         self.segment_synapse_permanence.reshape(-1, self.segment_synapse_capacity)[(learning_segment[learning_segment_synapse_cell_valid[0]], learning_segment_synapse_cell_valid[1])] += self.cell_active.reshape(-1)[learning_segment_synapse_cell] * (self.permanence_increment + self.permanence_decrement) - self.permanence_decrement
         
-        punished_segment = np.nonzero(self.segment_active.reshape(-1, self.segment_capacity)[self.prev_target_cell])
-        punished_segment = self.prev_target_cell[punished_segment[0]] * self.segment_capacity + punished_segment[1]
+        punished_segment = np.nonzero(self.segment_active.reshape(-1)[self.prev_target_segment])[0]
         punished_segment_synapse_cell = self.segment_synapse_cell.reshape(-1, self.segment_synapse_capacity)[punished_segment]
         punished_segment_synapse_cell_valid = np.nonzero(punished_segment_synapse_cell >= 0)
         punished_segment_synapse_cell = punished_segment_synapse_cell[punished_segment_synapse_cell_valid]
@@ -150,26 +149,38 @@ class TemporalMemory:
                 segment_candidate = segment_candidate[new_synapse_segment]
                 segment_new_synapses = segment_new_synapses[new_synapse_segment]
                 shuffled_candidate_index = shuffled_candidate_index[new_synapse_segment]
+                
                 segment_synapses = self.segment_synapses.reshape(-1)[learning_segment]
-
                 max_segment_synapses = np.max(segment_synapses + segment_new_synapses) if len(learning_segment) > 0 else 0
                 if max_segment_synapses > self.segment_synapse_capacity:
-                    segment_synapse_capacity = max_segment_synapses
-                    segment_synapse_cell = np.full((self.columns, self.cells, self.segment_capacity, segment_synapse_capacity), -1, dtype=np.long)
-                    segment_synapse_permanence = np.zeros((self.columns, self.cells, self.segment_capacity, segment_synapse_capacity), dtype=np.float32)
-                    segment_synapse_cell[:, :, :, :self.segment_synapse_capacity] = self.segment_synapse_cell
-                    segment_synapse_permanence[:, :, :, :self.segment_synapse_capacity] = self.segment_synapse_permanence
-                    self.segment_synapse_capacity = segment_synapse_capacity
-                    self.segment_synapse_cell = segment_synapse_cell
-                    self.segment_synapse_permanence = segment_synapse_permanence
+                    segment_synapses = np.zeros(len(learning_segment), dtype=np.long)
+                    valid_segment_synapse = np.nonzero(self.segment_synapse_permanence.reshape(-1, self.segment_synapse_capacity)[learning_segment] > 0)
+                    segment_synapse_offset = np.zeros(len(learning_segment), dtype=np.long)
+                    if len(valid_segment_synapse[0]) > 0:
+                        valid_segment_synapse_offset = np.concatenate([np.zeros(1, dtype=np.long), 1 + np.nonzero(valid_segment_synapse[0][1:] != valid_segment_synapse[0][:-1])[0]])
+                        valid_segment = valid_segment_synapse[0][valid_segment_synapse_offset]
+                        segment_synapses[valid_segment] = np.concatenate([valid_segment_synapse_offset[1:] - valid_segment_synapse_offset[:-1], len(valid_segment_synapse[0]) - valid_segment_synapse_offset[-1].reshape(1)])
+                        segment_synapse_offset[valid_segment] = valid_segment_synapse_offset
+                    valid_segment_synapse_target = (valid_segment_synapse[0], np.arange(len(valid_segment_synapse[0]), dtype=np.long) - segment_synapse_offset[valid_segment_synapse[0]])
+                    valid_segment_synapse = (learning_segment[valid_segment_synapse[0]], valid_segment_synapse[1])
+                    self.segment_synapse_cell.reshape(-1, self.segment_synapse_capacity)[valid_segment_synapse_target] = self.segment_synapse_cell.reshape(-1, self.segment_synapse_capacity)[valid_segment_synapse]
+                    self.segment_synapse_permanence.reshape(-1, self.segment_synapse_capacity)[valid_segment_synapse_target] = self.segment_synapse_permanence.reshape(-1, self.segment_synapse_capacity)[valid_segment_synapse]
+
+                    max_segment_synapses = np.max(segment_synapses + segment_new_synapses) if len(learning_segment) > 0 else 0
+                    if max_segment_synapses > self.segment_synapse_capacity:
+                        segment_synapse_capacity = max_segment_synapses
+                        segment_synapse_cell = np.full((self.columns, self.cells, self.segment_capacity, segment_synapse_capacity), -1, dtype=np.long)
+                        segment_synapse_permanence = np.zeros((self.columns, self.cells, self.segment_capacity, segment_synapse_capacity), dtype=np.float32)
+                        segment_synapse_cell[:, :, :, :self.segment_synapse_capacity] = self.segment_synapse_cell
+                        segment_synapse_permanence[:, :, :, :self.segment_synapse_capacity] = self.segment_synapse_permanence
+                        self.segment_synapse_capacity = segment_synapse_capacity
+                        self.segment_synapse_cell = segment_synapse_cell
+                        self.segment_synapse_permanence = segment_synapse_permanence
 
                 segment_target = np.nonzero(segment_candidate >= 0)
-                segment_target_offset = np.ones(len(segment_target[0]), dtype=np.bool)
-                segment_target_offset[1:] = segment_target[0][1:] != segment_target[0][:-1]
-                segment_target_offset = np.nonzero(segment_target_offset)[0]
+                segment_target_offset = np.concatenate([np.zeros(1, dtype=np.long), 1 + np.nonzero(segment_target[0][1:] != segment_target[0][:-1])[0]])
                 segment_target_end = np.where(segment_new_synapses > 0, segment_target[1][segment_target_offset + segment_new_synapses - 1], 0)
-                segment_target_offset[0] = len(segment_target[0])
-                segment_new_synapse = np.arange(len(segment_target[0]), dtype=np.long) % segment_target_offset[segment_target[0]]
+                segment_new_synapse = np.arange(len(segment_target[0]), dtype=np.long) - segment_target_offset[segment_target[0]]
                 segment_target_valid = np.nonzero(segment_target[1] <= segment_target_end[segment_target[0]])
                 segment_target = (segment_target[0][segment_target_valid], segment_target[1][segment_target_valid])
                 segment_new_synapse = segment_synapses[segment_target[0]] + segment_new_synapse[segment_target_valid]
@@ -179,7 +190,7 @@ class TemporalMemory:
                 self.segment_synapse_cell.reshape(-1, self.segment_synapse_capacity)[(segment_target_segment, segment_new_synapse)] = segment_target_candidate
 
                 self.cell_segments[(growing_segment_column, growing_segment_cell)] += 1
-                self.segment_synapses.reshape(-1)[learning_segment] += segment_new_synapses
+                self.segment_synapses.reshape(-1)[learning_segment] = segment_new_synapses + segment_new_synapses
                 
                 # TODO: they're not candidates at this point
                 candidate_target = (shuffled_candidate_index[segment_target], segment_target[0])
@@ -209,11 +220,8 @@ class TemporalMemory:
                     self.cell_synapse_cell = cell_synapse_cell
 
                 candidate_synapse_cell_valid = np.nonzero(candidate_synapse_cell_valid)
-                candidate_synapse_cell_offset = np.ones(len(candidate_synapse_cell_valid[0]), dtype=np.bool)
-                candidate_synapse_cell_offset[1:] = candidate_synapse_cell_valid[0][1:] != candidate_synapse_cell_valid[0][:-1]
-                candidate_synapse_cell_offset = np.nonzero(candidate_synapse_cell_offset)[0]
-                candidate_synapse_cell_offset[0] = len(candidate_synapse_cell_valid[0])
-                candidate_synapse_cell_index = np.arange(len(candidate_synapse_cell_valid[0]), dtype=np.long) % candidate_synapse_cell_offset[candidate_synapse_cell_valid[0]]
+                candidate_synapse_cell_offset = np.concatenate([np.zeros(1, dtype=np.long), 1 + np.nonzero(candidate_synapse_cell_valid[0][1:] != candidate_synapse_cell_valid[0][:-1])[0]])
+                candidate_synapse_cell_index = np.arange(len(candidate_synapse_cell_valid[0]), dtype=np.long) - candidate_synapse_cell_offset[candidate_synapse_cell_valid[0]]
                 candidate_synapse_cell_candidate = candidate_synapse_cell_candidate[candidate_synapse_cell_valid[0]]
                 self.cell_synapse_cell.reshape(-1, self.cell_synapse_capacity)[(candidate_synapse_cell_candidate, candidate_synapse_cell_index)] = candidate_synapse_cell[candidate_synapse_cell_valid]
 
@@ -229,21 +237,23 @@ class TemporalMemory:
         active_cell_synapse_cell = active_cell_synapse_cell[active_cell_synapse_cell >= 0]
         cell_targeted[active_cell_synapse_cell] = True
         target_cell = np.nonzero(cell_targeted)[0]
+        target_segment = np.nonzero(np.arange(self.segment_capacity)[None, :] < self.cell_segments.reshape(-1)[target_cell][:, None])
+        target_segment = target_cell[target_segment[0]] * self.segment_capacity + target_segment[1]
         
-        segment_synapse_cell_active = self.cell_active.reshape(-1)[self.segment_synapse_cell.reshape(-1, self.segment_capacity, self.segment_synapse_capacity)[target_cell]]
-        segment_synapse_permanence = self.segment_synapse_permanence.reshape(-1, self.segment_capacity, self.segment_synapse_capacity)[target_cell]
+        segment_synapse_cell_active = self.cell_active.reshape(-1)[self.segment_synapse_cell.reshape(-1, self.segment_synapse_capacity)[target_segment]]
+        segment_synapse_permanence = self.segment_synapse_permanence.reshape(-1, self.segment_synapse_capacity)[target_segment]
         segment_synapse_weight = segment_synapse_permanence > self.permanence_threshold
 
         self.segment_activation[:, :, :] = 0
         self.segment_potential[:, :, :] = 0
-        self.segment_activation.reshape(-1, self.segment_capacity)[target_cell] = np.sum(segment_synapse_cell_active & segment_synapse_weight, axis=2)
-        self.segment_potential.reshape(-1, self.segment_capacity)[target_cell] = np.sum(segment_synapse_cell_active, axis=2)
+        self.segment_activation.reshape(-1)[target_segment] = np.sum(segment_synapse_cell_active & segment_synapse_weight, axis=1)
+        self.segment_potential.reshape(-1)[target_segment] = np.sum(segment_synapse_cell_active, axis=1)
         self.segment_active = self.segment_activation >= self.segment_active_threshold
         self.segment_matching = self.segment_potential >= self.segment_matching_threshold
         self.cell_predictive = np.any(self.segment_active, axis=2)
 
         self.prev_winner_cell = winner_cell
-        self.prev_target_cell = target_cell
+        self.prev_target_segment = target_segment
         
     @staticmethod
     def get_exponential_capacity(capacity):
@@ -262,7 +272,7 @@ class HierarchicalTemporalMemory:
         self.temporal_memory.run(self.spatial_pooler.active)
 
 if __name__ == '__main__':
-    input = np.random.randn(10, 1000) > 1.0
+    input = np.random.randn(100, 1000) > 1.0
     htm = HierarchicalTemporalMemory(1000, 2048, 32)
 
     import time

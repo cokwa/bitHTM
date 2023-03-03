@@ -51,24 +51,29 @@ class GlobalInhibition:
 
 
 class DynamicArray:
-    def __init__(self, sizes=[(1, )], dtypes=[np.float32], capacity=0, on_grow=None):
+    def __init__(self, sizes=[tuple()], dtypes=[np.float32], default_values=[0.0], capacity=0):
         self.length = 0
         self.capacity = capacity
+        
         self.sizes = sizes
         self.dtypes = dtypes
-        self.on_grow = on_grow
+        self.default_values = default_values
 
         self.arrays = self.initialize_arrays(self.capacity)
 
     def initialize_arrays(self, capacity):
-        return [np.empty((capacity, ) + size, dtype=dtype) for size, dtype in zip(self.sizes, self.dtypes)]
+        return [np.full((capacity, ) + size, default_value, dtype=dtype) for size, dtype, default_value in zip(self.sizes, self.dtypes, self.default_values)]
 
     def __len__(self):
         return self.length
 
     def __getitem__(self, index):
         return [array[:self.length][index] for array in self.arrays]
-        
+
+    def __setitem__(self, index, values):
+        for array, value in zip(self.arrays, values):
+            array[:self.length][index] = value
+
     def add(self, added_arrays):
         new_length = self.length + len(added_arrays[0])
         if new_length > self.capacity:
@@ -76,8 +81,6 @@ class DynamicArray:
             new_arrays = self.initialize_arrays(new_capacity)
             for old_array, new_array in zip(self.arrays, new_arrays):
                 new_array[:self.length] = old_array[:self.length]
-            if self.on_grow is not None:
-                new_arrays = self.on_grow(new_arrays, new_capacity)
             self.arrays = new_arrays
             self.capacity = new_capacity
         for array, added_array in zip(self.arrays, added_arrays):
@@ -115,66 +118,85 @@ class SpatialPooler:
 
 class TemporalMemory:
     class State:
-        def __init__(self, bursting_column=None, predictive_cell=None, active_cell=None, winner_cell=None):
+        def __init__(self, bursting_column, predictive_cell, active_cell, winner_cell, active_segment, matching_segment):
             self.bursting_column = bursting_column
             self.predictive_cell = predictive_cell
             self.active_cell = active_cell
             self.winner_cell = winner_cell
+            self.active_segment = active_segment
+            self.matching_segment = matching_segment
 
     # TODO: active_columns is temp
-    def __init__(self, column_dim, cell_dim, active_columns):
+    def __init__(self, column_dim, cell_dim):
         self.column_dim = column_dim
         self.cell_dim = cell_dim
 
         self.segm_matching_threshold = 10
         self.segm_active_threshold = 10
 
+        self.perm_initial = 0.01
         self.perm_threshold = 0.5
+        self.perm_increment = 0.3
+        self.perm_decrement = 0.05
+        self.perm_punishment = 0.01
 
-        # TODO: every bit of code referring to these is wrong.
-        # distal_postsynaptic is the distal segments and the permanence matrix should also grow in the other(synapses) direction.
-        self.distal_presynaptic = DynamicArray(sizes=[(self.column_dim, self.cell_dim)], dtypes=[np.int32])
-        self.distal_postsynaptic = DynamicArray(sizes=[(self.column_dim * self.cell_dim, )] * 2, dtypes=[np.int32, np.float32])
-
-        self.distal_synapse = DynamicArray(sizes=[(self.column_dim, self.cell_dim)] * 2, dtypes=[np.int32, np.float32])
+        self.cell_synapse = DynamicArray(sizes=[(self.column_dim, self.cell_dim)] * 2, dtypes=[np.int32, np.float32], default_values=[-1, -1.0])
+        self.segment_cell = DynamicArray(dtypes=[np.int32])
 
         self.last_state = TemporalMemory.State(
-            bursting_column=np.zeros((active_columns, ), dtype=np.bool_),
-            predictive_cell=np.zeros((self.column_dim, self.cell_dim), dtype=np.bool_),
-            active_cell=np.zeros((active_columns, self.cell_dim), dtype=np.bool_),
-            winner_cell=np.zeros((active_columns, self.cell_dim), dtype=np.bool_),
+            np.empty(0, dtype=np.bool_),
+            np.zeros((self.column_dim, self.cell_dim), dtype=np.bool_),
+            (np.empty(0, dtype=np.int32), np.empty(0, dtype=np.int32)),
+            (np.empty(0, dtype=np.int32), np.empty(0, dtype=np.int32)),
+            np.empty(0, dtype=np.bool_), np.empty(0, dtype=np.bool_)
         )
 
     def process(self, sp_state, prev_state=None, learning=True):
         if prev_state is None:
             prev_state = self.last_state
 
-        ac_prev_predictive_cell = prev_state.predictive_cell[sp_state.active_column]
-        ac_bursting_column = ~np.any(ac_prev_predictive_cell, axis=1)
+        prev_predictive_cell = prev_state.predictive_cell[sp_state.active_column]
+        bursting_column = ~np.any(prev_predictive_cell, axis=1, keepdims=True)
         
-        ac_active_cell = ac_prev_predictive_cell | np.expand_dims(ac_bursting_column, 1)
-        active_cell = np.zeros((self.column_dim, self.cell_dim), dtype=np.bool_)
-        active_cell[sp_state.active_column] = ac_active_cell
+        random_cell = np.zeros((len(sp_state.active_column), self.cell_dim), dtype=np.bool_)
+        random_cell[np.arange(len(sp_state.active_column)), np.random.randint(0, self.cell_dim, len(sp_state.active_column))] = True
 
-        target_segment, permanence = self.distal_synapse[:, sp_state.active_column]
-        target_segment, permanence = target_segment[:, ac_active_cell], permanence[:, ac_active_cell]
+        active_cell = np.where(prev_predictive_cell | bursting_column)
+        winner_cell = np.where(prev_predictive_cell | (bursting_column & random_cell))
 
-        postsynaptic_cell = np.unique(self.distal_presynaptic[:, sp_state.active_column][0][:, ac_active_cell])
-        presynaptic_cell, presynaptic_permanence = self.distal_postsynaptic[:, postsynaptic_cell]
-        presynaptic_weight = presynaptic_permanence >= self.perm_threshold
+        ######
 
-        active_presynaptic_cell = active_cell.reshape(-1)[presynaptic_cell]
-        segment_activation = np.sum(active_presynaptic_cell & presynaptic_weight, axis=1)
-        segment_potential = np.sum(active_presynaptic_cell, axis=1)
+        # TODO: bad name. come up with an adjective
+        # TODO: maybe noun_adjective: boolean mask, adjective_noun: indices like before?
+        cell_active = np.zeros(self.column_dim * self.cell_dim, dtype=np.bool_)
+        cell_active.reshape(self.column_dim, self.cell_dim)[active_cell] = True
+
+        prev_active_cell = prev_state.active_cell
+        target_segment, permanence = self.cell_synapse[:]
+        target_segment = target_segment[:, prev_active_cell[0], prev_active_cell[1]]
+        target_active_cell = cell_active[self.segment_cell[target_segment][0]]
+
+        permanence[:, prev_active_cell[0], prev_active_cell[1]] += prev_state.matching_segment[target_segment] * (target_active_cell * (self.perm_increment + self.perm_decrement) - self.perm_decrement)
+        
+        # TODO: validation needed
+        permanence[:, prev_active_cell[0], prev_active_cell[1]] -= (prev_state.active_segment[target_segment] & target_active_cell) * self.perm_punishment
+
+        ######
+
+        # TODO: using the word potential is probably bad
+        target_segment, permanence = map(np.ndarray.flatten, self.cell_synapse[:, active_cell[0], active_cell[1]])
+        segment_activation = np.zeros(len(self.segment_cell), dtype=np.int32)
+        segment_potential = np.zeros_like(segment_activation)
+        np.add.at(segment_activation, target_segment, permanence >= self.perm_threshold)
+        np.add.at(segment_potential, target_segment, 1)
         active_segment = segment_activation >= self.segm_active_threshold
-        matching_segment = segment_potential >= self.segm_matching_threshold
+        matching_segment = segment_potential >= self.segm_active_threshold
 
-        predictive_cell = np.zeros((self.column_dim * self.cell_dim), dtype=np.bool_)
-        predictive_cell[postsynaptic_cell] = np.any(active_segment, axis=0)
+        predictive_cell = np.zeros(self.column_dim * self.cell_dim, dtype=np.int32)
+        np.add.at(predictive_cell, self.segment_cell[active_segment][0], 1)
+        predictive_cell = (predictive_cell > 0).reshape(self.column_dim, self.cell_dim)
 
-        winner_cell = active_cell.copy()
-
-        curr_state = TemporalMemory.State(ac_bursting_column, predictive_cell.reshape(self.column_dim, self.cell_dim), active_cell, winner_cell)
+        curr_state = TemporalMemory.State(bursting_column.squeeze(1), predictive_cell, active_cell, winner_cell, active_segment, matching_segment)
         self.last_state = curr_state
         return curr_state
 
@@ -185,7 +207,7 @@ class HierarchicalTemporalMemory:
             active_columns = round(column_dim * 0.02)
 
         self.spatial_pooler = SpatialPooler(input_dim, column_dim, active_columns)
-        self.temporal_memory = TemporalMemory(column_dim, cell_dim, active_columns)
+        self.temporal_memory = TemporalMemory(column_dim, cell_dim)
 
     def process(self, input, learning=True):
         sp_state = self.spatial_pooler.process(input, learning=learning)

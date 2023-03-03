@@ -13,11 +13,8 @@ class DenseProjection:
 
         self.permanence = np.random.randn(output_dim, input_dim) * perm_std + perm_mean
 
-    def evaluate_weight(self):
-        return self.permanence >= self.perm_threshold
-
     def process(self, input):
-        weight = self.evaluate_weight()
+        weight = self.permanence >= self.perm_threshold
         overlaps = np.sum(weight & input, axis=1)
         return overlaps
 
@@ -45,12 +42,21 @@ class ExponentialBoosting:
         self.duty_cycle[active] += 1.0 - self.momentum
 
 
+class GlobalInhibition:
+    def __init__(self, actives):
+        self.actives = actives
+
+    def process(self, input):
+        return np.argpartition(input, -self.actives)[-self.actives:]
+
+
 class DynamicArray:
-    def __init__(self, sizes=[(1, )], dtypes=[np.float32], capacity=0):
+    def __init__(self, sizes=[(1, )], dtypes=[np.float32], capacity=0, on_grow=None):
         self.length = 0
         self.capacity = capacity
         self.sizes = sizes
         self.dtypes = dtypes
+        self.on_grow = on_grow
 
         self.arrays = self.initialize_arrays(self.capacity)
 
@@ -70,6 +76,8 @@ class DynamicArray:
             new_arrays = self.initialize_arrays(new_capacity)
             for old_array, new_array in zip(self.arrays, new_arrays):
                 new_array[:self.length] = old_array[:self.length]
+            if self.on_grow is not None:
+                new_arrays = self.on_grow(new_arrays, new_capacity)
             self.arrays = new_arrays
             self.capacity = new_capacity
         for array, added_array in zip(self.arrays, added_arrays):
@@ -91,14 +99,12 @@ class SpatialPooler:
 
         self.proximal_projection = DenseProjection(input_dim, column_dim)
         self.boosting = ExponentialBoosting(column_dim, active_columns)
-
-    def evaluate_active_column(self, overlaps):
-        return np.argpartition(overlaps, -self.active_columns)[-self.active_columns:]
+        self.inhibition = GlobalInhibition(active_columns)
 
     def process(self, input, learning=True):
         overlaps = self.proximal_projection.process(input)
         boosted_overlaps = self.boosting.process(overlaps)
-        active_column = self.evaluate_active_column(boosted_overlaps)
+        active_column = self.inhibition.process(boosted_overlaps)
 
         if learning:
             self.proximal_projection.update(input, active_column)
@@ -130,6 +136,8 @@ class TemporalMemory:
         self.distal_presynaptic = DynamicArray(sizes=[(self.column_dim, self.cell_dim)], dtypes=[np.int32])
         self.distal_postsynaptic = DynamicArray(sizes=[(self.column_dim * self.cell_dim, )] * 2, dtypes=[np.int32, np.float32])
 
+        self.distal_synapse = DynamicArray(sizes=[(self.column_dim, self.cell_dim)] * 2, dtypes=[np.int32, np.float32])
+
         self.last_state = TemporalMemory.State(
             bursting_column=np.zeros((active_columns, ), dtype=np.bool_),
             predictive_cell=np.zeros((self.column_dim, self.cell_dim), dtype=np.bool_),
@@ -141,14 +149,17 @@ class TemporalMemory:
         if prev_state is None:
             prev_state = self.last_state
 
-        col_prev_predictive_cell = prev_state.predictive_cell[sp_state.active_column]
-        col_bursting_column = ~np.any(col_prev_predictive_cell, axis=1)
+        ac_prev_predictive_cell = prev_state.predictive_cell[sp_state.active_column]
+        ac_bursting_column = ~np.any(ac_prev_predictive_cell, axis=1)
         
-        col_active_cell = col_prev_predictive_cell | np.expand_dims(col_bursting_column, 1)
+        ac_active_cell = ac_prev_predictive_cell | np.expand_dims(ac_bursting_column, 1)
         active_cell = np.zeros((self.column_dim, self.cell_dim), dtype=np.bool_)
-        active_cell[sp_state.active_column] = col_active_cell
+        active_cell[sp_state.active_column] = ac_active_cell
 
-        postsynaptic_cell = np.unique(self.distal_presynaptic[:, sp_state.active_column][0][:, col_active_cell])
+        target_segment, permanence = self.distal_synapse[:, sp_state.active_column]
+        target_segment, permanence = target_segment[:, ac_active_cell], permanence[:, ac_active_cell]
+
+        postsynaptic_cell = np.unique(self.distal_presynaptic[:, sp_state.active_column][0][:, ac_active_cell])
         presynaptic_cell, presynaptic_permanence = self.distal_postsynaptic[:, postsynaptic_cell]
         presynaptic_weight = presynaptic_permanence >= self.perm_threshold
 
@@ -163,7 +174,7 @@ class TemporalMemory:
 
         winner_cell = active_cell.copy()
 
-        curr_state = TemporalMemory.State(col_bursting_column, predictive_cell.reshape(self.column_dim, self.cell_dim), active_cell, winner_cell)
+        curr_state = TemporalMemory.State(ac_bursting_column, predictive_cell.reshape(self.column_dim, self.cell_dim), active_cell, winner_cell)
         self.last_state = curr_state
         return curr_state
 

@@ -206,6 +206,13 @@ class TemporalMemory:
             cell_segments_jittered = (cell_segments_jittered + np.random.rand(*cell_segments_jittered.shape)).astype(np.float32)
             least_used_cell = np.argmin(cell_segments_jittered, axis=1)
 
+            segment_learning = np.zeros(len(self.segment_cell), dtype=np.bool_)
+            np.maximum.at(segment_learning, target_segment, target_segment_learning)
+            learning_segment = np.concatenate([np.where(segment_learning)[0], np.arange(len(least_used_cell)) + len(self.segment_cell)])
+            segment_new_synapses = np.zeros(len(learning_segment), dtype=np.int32)
+            segment_new_synapses[:-len(least_used_cell)] = self.syn_sample_size - prev_state.segment_potential[learning_segment[:-len(least_used_cell)]]
+            segment_new_synapses[-len(least_used_cell):] = self.syn_sample_size
+
             self.segment_cell.add(least_used_cell)
             self.cell_segments[segment_growing_column, least_used_cell] += 1
 
@@ -213,16 +220,28 @@ class TemporalMemory:
             winner_cell[least_used_cell] = True
             winner_cell = np.where(winner_cell)
 
-            learning_segment_potential = target_segment_potential[target_segment_learning]
-            segment_new_synapses = np.empty(len(learning_segment_potential) + len(least_used_cell), dtype=np.int32)
-            segment_new_synapses[:len(learning_segment_potential)] = self.syn_sample_size - learning_segment_potential
-            segment_new_synapses[len(learning_segment_potential):] = self.syn_sample_size
+            prev_winner_cell = prev_state.winner_cell
+            target_segment, permanence = self.cell_synapse[prev_winner_cell[0], prev_winner_cell[1]]
+
+            cell_segment_candidate = np.empty((target_segment.shape[0], target_segment.shape[1] + len(learning_segment)), dtype=np.int32)
+            cell_segment_candidate[:, :-len(learning_segment)] = (permanence > 0.0) * (target_segment + 1) - 1
+            cell_segment_candidate[:, -len(learning_segment):] = np.expand_dims(learning_segment, axis=0)
+            cell_segment_candidate.sort(axis=1)
+
+            cell_segment_already_targeted = cell_segment_candidate[:, :-1] == cell_segment_candidate[:, 1:]
+            cell_segment_candidate[:, :-1][cell_segment_already_targeted] = -1
+            cell_segment_candidate[:, 1:][cell_segment_already_targeted] = -1
+
+            cell_segment_priority = np.random.rand(*cell_segment_candidate.shape)
+            cell_segment_priority[cell_segment_candidate < 0] = np.inf
+            # cell_segment_sample = np.argpartition(cell_segment_priority, self.syn_sample_size, axis=1)[:, :self.syn_sample_size]
+            # cell_segment_candidate = np.take_along_axis(cell_segment_candidate, cell_segment_sample, axis=1)
 
         target_segment, permanence = map(np.ndarray.flatten, self.cell_synapse[active_cell[0], active_cell[1]])
         segment_activation = np.zeros(len(self.segment_cell), dtype=np.int32)
         segment_potential = np.zeros_like(segment_activation)
         np.add.at(segment_activation, target_segment, permanence >= self.perm_threshold)
-        np.add.at(segment_potential, target_segment, 1)
+        np.add.at(segment_potential, target_segment, permanence > 0.0)
 
         cell_prediction = np.zeros(self.column_dim * self.cell_dim, dtype=np.int32)
         np.add.at(cell_prediction, self.segment_cell[segment_activation >= self.segm_activation_threshold][0], 1)

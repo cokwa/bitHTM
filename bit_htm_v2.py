@@ -88,28 +88,6 @@ class DynamicArray:
         self.length = new_length
 
 
-# class DynamicMultiarray(DynamicArray):
-#     def __init__(self, size=(1, ), dtypes=[np.float32], capacity=0, capacity_exponential=True):
-#         super().__init__(size=size, dtypes=dtypes, capacity=capacity, capacity_exponential=capacity_exponential)
-        
-#         self.lengths = np.zeros(size, dtype=np.int32)
-
-#     def add(self, index, *added_arrays):
-#         new_lengths = self.lengths[index] + added_arrays[0].shape[-1]
-#         new_lengths_max = new_lengths.max()
-#         if new_lengths_max > self.capacity:
-#             new_capacity = 2 ** int(np.ceil(np.log2(new_lengths_max))) if self.capacity_exponential else new_lengths_max
-#             new_arrays = self.initialize_arrays(new_capacity)
-#             for old_array, new_array in zip(self.arrays, new_arrays):
-#                 new_array[..., :self.length] = old_array[..., :self.length]
-#             self.arrays = new_arrays
-#             self.capacity = new_capacity
-#         for array, added_array in zip(self.arrays, added_arrays):
-#             array[np.repeat(index,, np.tile(np.arange(added_arrays[0].shape[-1]))] = added_array
-#         self.lengths = new_lengths
-#         self.length = max(self.length, new_lengths_max)
-
-
 class SpatialPooler:
     class State:
         def __init__(self, overlaps, boosted_overlaps, active_column):
@@ -166,7 +144,8 @@ class TemporalMemory:
         self.eps = 1e-8
 
         self.cell_segments = np.zeros((self.column_dim, self.cell_dim), dtype=np.int32)
-        self.cell_synapse = DynamicArray(size=(self.column_dim, self.cell_dim), dtypes=[np.int32, np.float32], capacity_exponential=False)
+        # self.cell_synapse = DynamicArray(size=(self.column_dim, self.cell_dim), dtypes=[np.int32, np.float32], capacity_exponential=False)
+        self.cell_synapse = DynamicArray(size=(self.column_dim, self.cell_dim), dtypes=[np.int32, np.float32])
         self.segment_cell = DynamicArray(dtypes=[np.int32])
 
         self.last_state = TemporalMemory.State(
@@ -236,7 +215,7 @@ class TemporalMemory:
             segment_new_synapses[:-len(least_used_cell)] = self.syn_sample_size - prev_state.segment_potential[learning_segment[:-len(least_used_cell)]]
             segment_new_synapses[-len(least_used_cell):] = self.syn_sample_size
 
-            self.segment_cell.add(least_used_cell)
+            self.segment_cell.add(segment_growing_column * self.cell_dim + least_used_cell)
             self.cell_segments[segment_growing_column, least_used_cell] += 1
 
             prev_winner_cell = prev_state.winner_cell
@@ -280,7 +259,11 @@ class TemporalMemory:
             )
             priority_argsort = np.argsort(segment_cell_priority, axis=1)
 
-            # self.cell_synapse.add()
+            new_target_segment = np.random.randint(0, len(self.segment_cell), (self.column_dim, self.cell_dim, len(learning_segment)), dtype=np.int32)
+            new_permanence = np.full(new_target_segment.shape, -1.0, dtype=np.float32)
+            new_target_segment[prev_winner_cell] = learning_segment[priority_argsort]
+            new_permanence[prev_winner_cell] = (np.take_along_axis(segment_cell_priority, priority_argsort, axis=1) < 1) * (self.perm_initial + 1.0) - 1.0
+            self.cell_synapse.add(new_target_segment, new_permanence)
 
         target_segment, permanence = map(np.ndarray.flatten, self.cell_synapse[active_cell])
         segment_activation = np.zeros(len(self.segment_cell), dtype=np.int32)
@@ -312,7 +295,7 @@ class HierarchicalTemporalMemory:
 
 
 if __name__ == '__main__':
-    inputs = np.random.randn(100, 1000) > 1.0
+    inputs = np.random.randn(10, 1000) > 1.0
     htm = HierarchicalTemporalMemory(inputs.shape[1], 2048, 32)
 
     import time
@@ -322,6 +305,7 @@ if __name__ == '__main__':
     for epoch in range(10):
         for input in inputs:
             sp_state, tm_state = htm.process(input)
+            print(tm_state.column_bursting.sum(), tm_state.cell_prediction.sum())
             # print(htm.spatial_pooler.boosting.duty_cycle.mean(), htm.spatial_pooler.boosting.duty_cycle.std())
 
     print(f'{time.time() - start_time}s')

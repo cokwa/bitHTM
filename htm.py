@@ -9,7 +9,7 @@ class SpatialPooler:
 
         self.sparsity = self.active_columns / self.columns
 
-        self.boosting_intensity = 0.3
+        self.boosting_intensity = 0.2
         self.duty_cycle_inertia = 0.99
 
         self.permanence_threshold = 0.0
@@ -22,7 +22,7 @@ class SpatialPooler:
 
         self.active = np.zeros(self.active_columns, dtype=np.int32)
 
-        self.permanence = np.random.randn(self.columns, self.input_size)
+        self.permanence = np.random.randn(self.columns, self.input_size) * 0.1
 
     def run(self, input):
         weight = self.permanence > self.permanence_threshold
@@ -269,7 +269,7 @@ class HierarchicalTemporalMemory:
         self.temporal_memory.run(self.spatial_pooler.active)
 
 if __name__ == '__main__':
-    input = np.random.randn(100, 1000) > 1.0
+    input = np.random.rand(10, 1000) < 0.2
     htm = HierarchicalTemporalMemory(1000, 2048, 32)
 
     import time
@@ -278,7 +278,15 @@ if __name__ == '__main__':
 
     for epoch in range(100):
         for i in range(len(input)):
-            htm.run(input[i])
-            print('epoch {}, pattern {}: correctly predicted columns: {}'.format(epoch, i, np.sum(np.any(htm.temporal_memory.cell_active & ~np.all(htm.temporal_memory.cell_active, axis=1)[:, None], axis=1))))
+            prev_column_predictive = htm.temporal_memory.cell_predictive.any(axis=1)
+
+            htm.run(input[i] ^ (np.random.rand(*input[i].shape) < 0.05))
+
+            hist, bins = np.histogram(np.log(htm.spatial_pooler.duty_cycle + 1), bins=[0, 0.015, 0.025, 0.035, 0.045, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
+            print(*[f'{bin[0]} ({freq})' for bin, freq in zip(zip(bins[:-1], bins[1:]), hist) if freq > 0], bins[np.nonzero(hist)[0][-1] + 1])
+            
+            corrects = prev_column_predictive[htm.spatial_pooler.active].sum()
+            incorrects = prev_column_predictive.sum() - corrects
+            print('epoch {}, pattern {}: correct columns: {}, incorrect columns: {}'.format(epoch, i, corrects, incorrects))
 
     print('{}s'.format(time.time() - prev_time))

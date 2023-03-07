@@ -188,21 +188,19 @@ class TemporalMemory:
 
             target_segment_activation = prev_state.segment_activation[target_segment]
             target_segment_potential = prev_state.segment_potential[target_segment]
-            target_segment_potential_jittered = (target_segment_potential + np.random.rand(*target_segment_potential.shape)).astype(np.float32)
-
             target_segment_active = target_segment_activation >= self.segm_activation_threshold
             target_segment_matching = target_segment_potential >= self.segm_matching_threshold
 
+            target_segment_potential_jittered = (target_segment_potential + np.random.rand(*target_segment_potential.shape)).astype(np.float32)
             column_max_potential = np.zeros(self.column_dim, dtype=np.float32)
             np.maximum.at(column_max_potential, target_column.flatten(), target_segment_potential_jittered.flatten())
             column_max_potential *= column_activation
             # column_max_potential = column_activation * bincount(target_column.flatten(), weights=target_segment_potential_jittered.flatten(), minLength=self.column_dim).astype(np.int32)
-            
             target_segment_best_matching = target_segment_matching & (np.abs(target_segment_potential_jittered - column_max_potential[target_column]) < self.eps)
             target_segment_learning = target_segment_active | target_segment_best_matching
 
             permanence[prev_active_cell] += target_segment_learning * (target_column_activation * (self.perm_increment + self.perm_decrement) - self.perm_decrement)
-            permanence[prev_active_cell] -= (target_segment_potential & target_column_punishment) * self.perm_punishment
+            permanence[prev_active_cell] -= (target_segment_matching & target_column_punishment) * self.perm_punishment
 
             segment_growing_active_column = np.where(column_bursting & (column_max_potential[sp_state.active_column] < self.segm_matching_threshold))[0]
             segment_growing_column = sp_state.active_column[segment_growing_active_column]

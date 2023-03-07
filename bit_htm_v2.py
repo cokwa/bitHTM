@@ -42,6 +42,12 @@ class ExponentialBoosting:
         self.duty_cycle[active] += 1.0 - self.momentum
 
 
+def bincount(x, weights=None, minLength=0):
+    out = np.bincount(x, weights=weights)
+    out = np.concatenate([out, np.zeros(minLength - len(out), dtype=out.dtype)])
+    return out
+
+
 class GlobalInhibition:
     def __init__(self, actives):
         self.actives = actives
@@ -190,6 +196,7 @@ class TemporalMemory:
             column_max_potential = np.zeros(self.column_dim, dtype=np.float32)
             np.maximum.at(column_max_potential, target_column.flatten(), target_segment_potential_jittered.flatten())
             column_max_potential *= column_activation
+            # column_max_potential = column_activation * bincount(target_column.flatten(), weights=target_segment_potential_jittered.flatten(), minLength=self.column_dim).astype(np.int32)
             
             target_segment_best_matching = target_segment_matching & (np.abs(target_segment_potential_jittered - column_max_potential[target_column]) < self.eps)
             target_segment_learning = target_segment_active | target_segment_best_matching
@@ -208,8 +215,9 @@ class TemporalMemory:
             winner_cell = np.where(winner_cell)
             winner_cell = (sp_state.active_column[winner_cell[0]], winner_cell[1])
 
-            segment_learning = np.zeros(len(self.segment_cell), dtype=np.bool_)
-            np.maximum.at(segment_learning, target_segment.flatten(), target_segment_learning.flatten())
+            # segment_learning = np.zeros(len(self.segment_cell), dtype=np.bool_)
+            # np.maximum.at(segment_learning, target_segment.flatten(), target_segment_learning.flatten())
+            segment_learning = bincount(target_segment.flatten(), weights=target_segment_learning.flatten(), minLength=len(self.segment_cell)) > 0
             learning_segment = np.concatenate([np.where(segment_learning)[0], np.arange(len(least_used_cell)) + len(self.segment_cell)])
             segment_new_synapses = np.zeros(len(learning_segment), dtype=np.int32)
             segment_new_synapses[:-len(least_used_cell)] = self.syn_sample_size - prev_state.segment_potential[learning_segment[:-len(least_used_cell)]]
@@ -266,13 +274,16 @@ class TemporalMemory:
             self.cell_synapse.add(new_target_segment, new_permanence)
 
         target_segment, permanence = map(np.ndarray.flatten, self.cell_synapse[active_cell])
-        segment_activation = np.zeros(len(self.segment_cell), dtype=np.int32)
-        segment_potential = np.zeros_like(segment_activation)
-        np.add.at(segment_activation, target_segment, permanence >= self.perm_threshold)
-        np.add.at(segment_potential, target_segment, permanence > 0.0)
+        # segment_activation = np.zeros(len(self.segment_cell), dtype=np.int32)
+        # segment_potential = np.zeros_like(segment_activation)
+        # np.add.at(segment_activation, target_segment, permanence >= self.perm_threshold)
+        # np.add.at(segment_potential, target_segment, permanence > 0.0)
+        segment_activation = bincount(target_segment, weights=permanence >= self.perm_threshold, minLength=len(self.segment_cell)).astype(np.int32)
+        segment_potential = bincount(target_segment, weights=permanence > 0.0, minLength=len(self.segment_cell)).astype(np.int32)
 
-        cell_prediction = np.zeros(self.column_dim * self.cell_dim, dtype=np.int32)
-        np.add.at(cell_prediction, self.segment_cell[segment_activation >= self.segm_activation_threshold][0], 1)
+        # cell_prediction = np.zeros(self.column_dim * self.cell_dim, dtype=np.int32)
+        # np.add.at(cell_prediction, self.segment_cell[segment_activation >= self.segm_activation_threshold][0], 1)
+        cell_prediction = bincount(self.segment_cell[segment_activation >= self.segm_activation_threshold][0], minLength=self.column_dim * self.cell_dim)
         cell_prediction = (cell_prediction > 0).reshape(self.column_dim, self.cell_dim)
 
         curr_state = TemporalMemory.State(column_bursting, cell_prediction, active_cell, winner_cell, segment_activation, segment_potential)
@@ -305,7 +316,7 @@ if __name__ == '__main__':
     for epoch in range(10):
         for input in inputs:
             sp_state, tm_state = htm.process(input)
-            print(tm_state.column_bursting.sum(), tm_state.cell_prediction.sum())
+            print(tm_state.column_bursting.sum(), tm_state.cell_prediction.sum(), tm_state.segment_potential.sum())
             # print(htm.spatial_pooler.boosting.duty_cycle.mean(), htm.spatial_pooler.boosting.duty_cycle.std())
 
     print(f'{time.time() - start_time}s')

@@ -21,10 +21,16 @@ def construct_block_mapping(block_lengths):
     col_index -= block_borders[row_index]
     return (row_index, col_index)
 
-def nonzero_capped(value, max_lengths):
+def nonzero_bounded_2d(value, bounds, offset=None, lengths=None):
+    if offset is None:
+        if lengths is None:
+            lengths = (value != 0).sum(axis=1)
+        _, offset = construct_block_mapping(lengths)
     index = np.nonzero(value)
-    kept = np.nonzero(index[1] < max_lengths[index[0]])
-    return (index[0][kept], index[1][kept])
+    if type(bounds) == np.ndarray:
+        bounds = bounds[index[0]]
+    bounded = np.nonzero(offset < bounds)
+    return (index[0][bounded], index[1][bounded])
 
 
 class DenseProjection:
@@ -91,6 +97,8 @@ class DynamicArray:
         return tuple(np.empty(self.size + (capacity, ), dtype=dtype) for dtype in self.dtypes)
 
     def evaluate_capacity(self, length):
+        if length == 0:
+            return 0
         return 2 ** int(np.ceil(np.log2(length))) if self.capacity_exponential else length
 
     def __len__(self):
@@ -103,37 +111,45 @@ class DynamicArray:
         for array, value in zip(self.arrays, values):
             array[..., :self.length][index] = value
 
+    def set_capcity(self, new_capacity):
+        if new_capacity <= self.capacity:
+            self.arrays = tuple(array[..., :new_capacity] for array in self.arrays)
+            self.length = min(self.length, new_capacity)
+            self.capacity = new_capacity
+            return
+
+        new_arrays = self.initialize_arrays(new_capacity)
+        for old_array, new_array in zip(self.arrays, new_arrays):
+            new_array[..., :self.length] = old_array[..., :self.length]
+        self.arrays = new_arrays
+        self.capacity = new_capacity
+
     def add(self, *added_arrays):
         new_length = self.length + added_arrays[0].shape[-1]
         if new_length > self.capacity:
-            new_capacity = self.evaluate_capacity(new_length)
-            new_arrays = self.initialize_arrays(new_capacity)
-            for old_array, new_array in zip(self.arrays, new_arrays):
-                new_array[..., :self.length] = old_array[..., :self.length]
-            self.arrays = new_arrays
-            self.capacity = new_capacity
+            self.set_capcity(self.evaluate_capacity(new_length))
         for array, added_array in zip(self.arrays, added_arrays):
             array[..., self.length:new_length] = added_array
         self.length = new_length
 
 
 class CompactDynamicArray(DynamicArray):
-    def __init__(self, size=tuple(), dtypes=[np.float32], capacity=0, capacity_exponential=True, is_stale=None, on_grow=None):
-        super().__init__(size=size, dtypes=dtypes, capacity=capacity, capacity_exponential=capacity_exponential)
-
+    def __init__(self, size=tuple(), dtypes=[np.float32], capacity=0, capacity_exponential=True, is_stale=None, initialize_override=None):
         self.is_stale = is_stale
-        self.on_grow = on_grow
+        self.initialize_override = initialize_override
 
         self.lengths = np.zeros(size, dtype=np.int32)
 
-    def add(self, index, *added_arrays, added_lengths=None):
+        super().__init__(size=size, dtypes=dtypes, capacity=capacity, capacity_exponential=capacity_exponential)
+
+    def initialize_arrays(self, capacity):
+        if self.initialize_override is None:
+            return super().initialize_arrays(capacity)
+        return self.initialize_override(self.size + (capacity, ))
+
+    def fill_blocks(self, index, *added_arrays, added_lengths=None):
         if added_lengths is None:
             added_lengths = added_arrays[0].shape[-1]
-
-        if len(index[0].shape) != 1:
-            index = tuple(axis_index.reshape(-1) for axis_index in index)
-            added_arrays = tuple(added_array.reshape(-1, added_array.shape[-1]) for added_array in added_arrays)
-            added_lengths = tuple(added_length.reshape(-1) for added_length in added_lengths)
 
         block_offset = self.lengths[index]
         block_lengths = np.clip(self.capacity - block_offset, 0, added_lengths)
@@ -142,26 +158,47 @@ class CompactDynamicArray(DynamicArray):
         self.lengths[index] += block_lengths
         self.length = max(self.length, (block_offset + block_lengths).max(initial=0))
         self[array_index] = tuple(added_array[block_index] for added_array in added_arrays)
-        added_lengths -= block_lengths
+        return block_lengths
 
-        if added_lengths.sum() <= 0:
-            return
+    def replace_stale(self, index, *added_arrays, added_lengths=None, prior_block_lengths=None, is_stale=None):
+        if added_lengths is None:
+            added_lengths = added_arrays[0].shape[-1]
+        if is_stale is None:
+            is_stale = self.is_stale
 
-        if self.is_stale is not None:
-            entry_stale = self.is_stale(self.get_flattened(index)).reshape(-1, self.capacity)
-            virtual_block_lengths = np.minimum(entry_invalid.sum(axis=1), added_lengths)
-            virtual_block_index = nonzero_capped(entry_stale, virtual_block_lengths)
-            block_index = construct_block_mapping(virtual_block_lengths)
+        entry_stale = is_stale(*self[index]).reshape(-1, self.capacity)
+        max_virtual_block_lengths = entry_stale.sum(axis=1)
+        virtual_block_lengths = np.minimum(max_virtual_block_lengths, added_lengths)
+        virtual_block_index = nonzero_bounded_2d(entry_stale, virtual_block_lengths, lengths=max_virtual_block_lengths)
+        block_index = construct_block_mapping(virtual_block_lengths)
 
-            # TODO: only for debugging!
-            assert np.all(virtual_block_index[0] == block_index[0])
+        array_index = tuple(axis_index[virtual_block_index[0]] for axis_index in index) + (virtual_block_index[1], )
+        added_array_index = block_index if prior_block_lengths is None else (block_index[0], prior_block_lengths[block_index[0]] + block_index[1])
+        self[array_index] = tuple(added_array[added_array_index] for added_array in added_arrays)
+        return virtual_block_lengths
 
-            array_index = tuple(axis_index[virtual_block_index[0]] for axis_index in index) + (virtual_block_index[1], )
-            added_array_index = block_index[0], block_lengths[block_index[0]] + block_index[1]
-            self[array_index] = tuple(added_array[added_array_index] for added_array in added_arrays)
-            added_lengths -= virtual_block_lengths
+    def add(self, index, *added_arrays, added_lengths=None):
+        if added_lengths is None:
+            added_lengths = np.full(index[0].shape, added_arrays[0].shape[-1], dtype=np.int32)
 
-        raise NotImplementedError()
+        if len(index[0].shape) != 1:
+            index = tuple(axis_index.reshape(-1) for axis_index in index)
+            added_arrays = tuple(added_array.reshape(-1, added_array.shape[-1]) for added_array in added_arrays)
+            added_lengths = tuple(added_length.reshape(-1) for added_length in added_lengths)
+
+        if self.capacity > 0:
+            block_lengths = self.fill_blocks(index, *added_arrays, added_lengths=added_lengths)
+            added_lengths -= block_lengths
+            if added_lengths.sum() <= 0:
+                return
+
+            if self.is_stale is not None:
+                added_lengths -= self.replace_stale(index, *added_arrays, added_lengths=added_lengths, prior_block_lengths=block_lengths)
+                if added_lengths.sum() <= 0:
+                    return
+
+        self.set_capcity(self.evaluate_capacity(self.capacity + added_lengths.max(initial=0)))
+        self.fill_blocks(index, *added_arrays, added_lengths=added_lengths)
 
 
 class SpatialPooler:
@@ -219,9 +256,15 @@ class TemporalMemory:
 
         self.eps = 1e-8
 
-        self.cell_segments = np.zeros((self.column_dim, self.cell_dim), dtype=np.int32)
-        self.cell_synapse = CompactDynamicArray(size=(self.column_dim, self.cell_dim), dtypes=[np.int32, np.float32], capacity=100, capacity_exponential=False)
         self.segment_cell = DynamicArray(dtypes=[np.int32])
+        self.cell_segments = np.zeros((self.column_dim, self.cell_dim), dtype=np.int32)
+        self.cell_synapse = CompactDynamicArray(
+            size=(self.column_dim, self.cell_dim),
+            dtypes=[np.int32, np.float32],
+            is_stale=lambda _, permanence: permanence <= 0.0,
+            initialize_override=lambda shape: (np.random.randint(0, len(self.segment_cell), shape, dtype=np.int32), np.full(shape, -1.0, dtype=np.float32)),
+            capacity_exponential=False
+        )
 
         self.last_state = TemporalMemory.State(
             np.empty(0, dtype=np.bool_),
@@ -367,7 +410,7 @@ class HierarchicalTemporalMemory:
 
 
 if __name__ == '__main__':
-    inputs = np.random.rand(10, 1000) < 0.2
+    inputs = np.random.rand(100, 1000) < 0.2
     htm = HierarchicalTemporalMemory(inputs.shape[1], 2048, 32)
 
     import time
@@ -378,13 +421,12 @@ if __name__ == '__main__':
         for curr_input in inputs:
             prev_column_prediction = htm.temporal_memory.last_state.cell_prediction.any(axis=1)
             
-            noisy_input = curr_input # ^ (np.random.rand(*input.shape) < 0.05)
+            noisy_input = curr_input # ^ (np.random.rand(*curr_input.shape) < 0.05)
             sp_state, tm_state = htm.process(noisy_input)
 
             burstings = tm_state.column_bursting.sum()
             corrects = prev_column_prediction[sp_state.active_column].sum()
             incorrects = prev_column_prediction.sum() - corrects
             print(burstings, corrects, incorrects)
-            # print(htm.spatial_pooler.boosting.duty_cycle.mean(), htm.spatial_pooler.boosting.duty_cycle.std())
 
     print(f'{time.time() - start_time}s')

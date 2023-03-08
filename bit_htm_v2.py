@@ -11,14 +11,23 @@ except:
         return out
 
 def construct_compact_mapping(mask):
-    lengths = mask.sum(axis=1)
+    count = mask.sum(axis=1)
     index = np.where(mask)
     border = np.where(index[0][1:] != index[0][:-1])
     meta_index = np.arange(len(index[1]))
     offset = np.zeros_like(meta_index)
     offset[1:][border] = meta_index[1:][border]
     offset = np.maximum.accumulate(offset)
-    return lengths, index, (index[0], meta_index - offset)
+    return count, index, (index[0], meta_index - offset)
+
+def rectify_compact_mapping(compact_index, index, min_length=None):
+    if min_length is None:
+        min_length = compact_index[1].max()
+    block_index = np.random.randint(0, index.shape[-1], (index.shape[0], min_length), dtype=np.int32)
+    index_valid = np.zeros(block_index.shape, dtype=np.bool_)
+    block_index[compact_index] = index[compact_index]
+    index_valid[compact_index] = True
+    return block_index, index_valid
 
 
 class DenseProjection:
@@ -112,38 +121,22 @@ class DynamicArray:
 
 
 class CompactDynamicArray(DynamicArray):
-    def __init__(self, size=tuple(), dtypes=[np.float32], capacity=0, capacity_exponential=True, is_invalid=None):
+    def __init__(self, size=tuple(), dtypes=[np.float32], capacity=0, capacity_exponential=True, is_invalid=None, on_grow=None):
         super().__init__(size=size, dtypes=dtypes, capacity=capacity, capacity_exponential=capacity_exponential)
 
         self.is_invalid = is_invalid
+        self.on_grow = on_grow
+
         self.lengths = np.zeros(size, dtype=np.int32)
 
-    def replace_invalid(added_lengths, index, *added_arrays):
-        subarrays = self[index]
-        entry_invalid = self.is_invalid(subarrays)
-        invalid_lengths, _, invalid_compact_index = construct_compact_mapping(entry_invalid)
-        invalid_compact_index = index[invalid_compact_index]
-        self[invalid_compact_index] = added_arrays[]
-
-        return added_lengths - invalid_lengths
-        
     def add(self, index, *added_arrays, added_lengths=None):
         if added_lengths is None:
             added_lengths = added_arrays[0].shape[-1]
 
-        replace_invalid(added_lengths, index, *added_arrays)
-
-        new_lengths = self.lengths[index] + added_lengths
-        max_new_length = new_lengths.max()
-        if max_new_length > self.capacity:
-            new_capacity = self.evaluate_capacity(new_length)
-            new_arrays = self.initialize_arrays(new_capacity)
-            for old_array, new_array in zip(self.arrays, new_arrays):
-                new_array[..., :self.length] = old_array[..., :self.length]
-            self.arrays = new_arrays
-            self.capacity = new_capacity
-        self.lengths = new_lengths
-        self.length = max_new_length
+        partial_lengths = self.lengths[index]
+        partial_free_space = np.minimum(np.maximum(self.capacity - partial_lengths, 0), added_lengths)
+        total_free_space = partial_free_space.sum()
+        offsets = partial_free_space.cumsum() - partial_free_space[0]
 
 
 class SpatialPooler:
@@ -303,20 +296,20 @@ class TemporalMemory:
 
             ###########################################
 
-            segment_full_to_learning = np.random.randint(0, len(learning_segment), len(self.segment_cell), dtype=np.int32)
-            segment_full_to_learning_valid = np.zeros_like(segment_full_to_learning, dtype=np.bool_)
-            segment_full_to_learning[learning_segment] = np.arange(len(learning_segment))
-            segment_full_to_learning_valid[learning_segment] = True
+            segment_total_to_learning = np.random.randint(0, len(learning_segment), len(self.segment_cell), dtype=np.int32)
+            segment_total_to_learning_valid = np.zeros_like(segment_total_to_learning_valid, dtype=np.bool_)
+            segment_total_to_learning[learning_segment] = np.arange(len(learning_segment))
+            segment_total_to_learning_valid[learning_segment] = True
 
             segment_cell_priority = np.random.rand(len(prev_winner_cell[0]), len(learning_segment)).astype(np.float32)
             # np.add.at(
             #     segment_cell_priority,
-            #     (np.repeat(np.arange(target_segment.shape[0]), target_segment.shape[1]), segment_full_to_learning[target_segment.flatten()]),
-            #     (segment_full_to_learning_valid[target_segment.flatten()] & (permanence.flatten() > 0.0)) * (1 + self.eps)
+            #     (np.repeat(np.arange(target_segment.shape[0]), target_segment.shape[1]), segment_total_to_learning[target_segment.flatten()]),
+            #     (segment_total_to_learning_valid[target_segment.flatten()] & (permanence.flatten() > 0.0)) * (1 + self.eps)
             # )
             segment_cell_priority += bincount(
-                np.repeat(np.arange(len(prev_winner_cell[0])), target_segment.shape[1]) * len(learning_segment) + segment_full_to_learning[target_segment.flatten()],
-                weights=(segment_full_to_learning_valid[target_segment.flatten()] & (permanence.flatten() > 0.0)) * (1.0 + self.eps),
+                np.repeat(np.arange(len(prev_winner_cell[0])), target_segment.shape[1]) * len(learning_segment) + segment_total_to_learning[target_segment.flatten()],
+                weights=(segment_total_to_learning_valid[target_segment.flatten()] & (permanence.flatten() > 0.0)) * (1.0 + self.eps),
                 minLength=len(prev_winner_cell[0]) * len(learning_segment)
             ).reshape(segment_cell_priority.shape)
             priority_argsort = np.argsort(segment_cell_priority, axis=1)

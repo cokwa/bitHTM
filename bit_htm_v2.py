@@ -10,24 +10,21 @@ except:
         out = np.concatenate([out, np.zeros(max(minLength - len(out), 0), dtype=out.dtype)])
         return out
 
-def construct_compact_mapping(mask):
-    count = mask.sum(axis=1)
-    index = np.where(mask)
-    border = np.where(index[0][1:] != index[0][:-1])
-    meta_index = np.arange(len(index[1]))
-    offset = np.zeros_like(meta_index)
-    offset[1:][border] = meta_index[1:][border]
-    offset = np.maximum.accumulate(offset)
-    return count, index, (index[0], meta_index - offset)
+def construct_block_mapping(block_lengths):
+    total_block_length = block_lengths.sum()
+    nonempty_blocks = np.nonzero(block_lengths)[0]
+    block_borders = block_lengths.cumsum() - block_lengths
+    row_index = np.zeros(total_block_length, dtype=np.int32)
+    row_index[block_borders[nonempty_blocks]] = np.arange(len(block_lengths))[nonempty_blocks]
+    row_index = np.maximum.accumulate(row_index)
+    col_index = np.arange(total_block_length, dtype=np.int32)
+    col_index -= block_borders[row_index]
+    return (row_index, col_index)
 
-def rectify_compact_mapping(compact_index, index, min_length=None):
-    if min_length is None:
-        min_length = compact_index[1].max()
-    block_index = np.random.randint(0, index.shape[-1], (index.shape[0], min_length), dtype=np.int32)
-    index_valid = np.zeros(block_index.shape, dtype=np.bool_)
-    block_index[compact_index] = index[compact_index]
-    index_valid[compact_index] = True
-    return block_index, index_valid
+def nonzero_capped(value, max_lengths):
+    index = np.nonzero(value)
+    kept = np.nonzero(index[1] < max_lengths[index[0]])
+    return (index[0][kept], index[1][kept])
 
 
 class DenseProjection:
@@ -121,10 +118,10 @@ class DynamicArray:
 
 
 class CompactDynamicArray(DynamicArray):
-    def __init__(self, size=tuple(), dtypes=[np.float32], capacity=0, capacity_exponential=True, is_invalid=None, on_grow=None):
+    def __init__(self, size=tuple(), dtypes=[np.float32], capacity=0, capacity_exponential=True, is_stale=None, on_grow=None):
         super().__init__(size=size, dtypes=dtypes, capacity=capacity, capacity_exponential=capacity_exponential)
 
-        self.is_invalid = is_invalid
+        self.is_stale = is_stale
         self.on_grow = on_grow
 
         self.lengths = np.zeros(size, dtype=np.int32)
@@ -133,10 +130,38 @@ class CompactDynamicArray(DynamicArray):
         if added_lengths is None:
             added_lengths = added_arrays[0].shape[-1]
 
-        partial_lengths = self.lengths[index]
-        partial_free_space = np.minimum(np.maximum(self.capacity - partial_lengths, 0), added_lengths)
-        total_free_space = partial_free_space.sum()
-        offsets = partial_free_space.cumsum() - partial_free_space[0]
+        if len(index[0].shape) != 1:
+            index = tuple(axis_index.reshape(-1) for axis_index in index)
+            added_arrays = tuple(added_array.reshape(-1, added_array.shape[-1]) for added_array in added_arrays)
+            added_lengths = tuple(added_length.reshape(-1) for added_length in added_lengths)
+
+        block_offset = self.lengths[index]
+        block_lengths = np.clip(self.capacity - block_offset, 0, added_lengths)
+        block_index = construct_block_mapping(block_lengths)
+        array_index = tuple(axis_index[block_index[0]] for axis_index in index) + (block_offset[block_index[0]] + block_index[1], )
+        self.lengths[index] += block_lengths
+        self.length = max(self.length, (block_offset + block_lengths).max(initial=0))
+        self[array_index] = tuple(added_array[block_index] for added_array in added_arrays)
+        added_lengths -= block_lengths
+
+        if added_lengths.sum() <= 0:
+            return
+
+        if self.is_stale is not None:
+            entry_stale = self.is_stale(self.get_flattened(index)).reshape(-1, self.capacity)
+            virtual_block_lengths = np.minimum(entry_invalid.sum(axis=1), added_lengths)
+            virtual_block_index = nonzero_capped(entry_stale, virtual_block_lengths)
+            block_index = construct_block_mapping(virtual_block_lengths)
+
+            # TODO: only for debugging!
+            assert np.all(virtual_block_index[0] == block_index[0])
+
+            array_index = tuple(axis_index[virtual_block_index[0]] for axis_index in index) + (virtual_block_index[1], )
+            added_array_index = block_index[0], block_lengths[block_index[0]] + block_index[1]
+            self[array_index] = tuple(added_array[added_array_index] for added_array in added_arrays)
+            added_lengths -= virtual_block_lengths
+
+        raise NotImplementedError()
 
 
 class SpatialPooler:
@@ -195,8 +220,7 @@ class TemporalMemory:
         self.eps = 1e-8
 
         self.cell_segments = np.zeros((self.column_dim, self.cell_dim), dtype=np.int32)
-        # self.cell_synapse = DynamicArray(size=(self.column_dim, self.cell_dim), dtypes=[np.int32, np.float32], capacity_exponential=False)
-        self.cell_synapse = CompactDynamicArray(size=(self.column_dim, self.cell_dim), dtypes=[np.int32, np.float32])
+        self.cell_synapse = CompactDynamicArray(size=(self.column_dim, self.cell_dim), dtypes=[np.int32, np.float32], capacity=100, capacity_exponential=False)
         self.segment_cell = DynamicArray(dtypes=[np.int32])
 
         self.last_state = TemporalMemory.State(
@@ -297,7 +321,7 @@ class TemporalMemory:
             ###########################################
 
             segment_total_to_learning = np.random.randint(0, len(learning_segment), len(self.segment_cell), dtype=np.int32)
-            segment_total_to_learning_valid = np.zeros_like(segment_total_to_learning_valid, dtype=np.bool_)
+            segment_total_to_learning_valid = np.zeros(len(self.segment_cell), dtype=np.bool_)
             segment_total_to_learning[learning_segment] = np.arange(len(learning_segment))
             segment_total_to_learning_valid[learning_segment] = True
 
@@ -314,11 +338,7 @@ class TemporalMemory:
             ).reshape(segment_cell_priority.shape)
             priority_argsort = np.argsort(segment_cell_priority, axis=1)
 
-            new_target_segment = np.random.randint(0, len(self.segment_cell), (self.column_dim, self.cell_dim, len(learning_segment)), dtype=np.int32)
-            new_permanence = np.full(new_target_segment.shape, -1.0, dtype=np.float32)
-            new_target_segment[prev_winner_cell] = learning_segment[priority_argsort]
-            new_permanence[prev_winner_cell] = (np.take_along_axis(segment_cell_priority, priority_argsort, axis=1) < 1) * (self.perm_initial + 1.0) - 1.0
-            self.cell_synapse.add(new_target_segment, new_permanence)
+            self.cell_synapse.add(prev_winner_cell, learning_segment[priority_argsort], np.full(priority_argsort.shape, self.perm_initial, dtype=np.float32))
 
         target_segment, permanence = map(np.ndarray.flatten, self.cell_synapse[active_cell])
         segment_activation = bincount(target_segment, weights=permanence >= self.perm_threshold, minLength=len(self.segment_cell)).astype(np.int32)

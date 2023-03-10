@@ -23,6 +23,8 @@ def construct_block_mapping(block_lengths):
 
 def nonzero_bounded_2d(value, bounds, offset=None, lengths=None):
     if offset is None:
+        if type(lengths) == int:
+            lengths = np.full(value.shape[0], lengths, dtype=np.int32)
         if lengths is None:
             lengths = (value != 0).sum(axis=1)
         _, offset = construct_block_mapping(lengths)
@@ -32,16 +34,18 @@ def nonzero_bounded_2d(value, bounds, offset=None, lengths=None):
     bounded = np.nonzero(offset < bounds)
     return (index[0][bounded], index[1][bounded])
 
-# TODO TODO TODO: account for invalid entries in added arrays
-def replace_free(arrays, added_arrays, index, free, added_lengths=None):
+def replace_free(arrays, added_arrays, index, free, added_array_valid=None, added_lengths=None):
     assert len(index.shape) == 1 and len(free.shape) == 2
     if added_lengths is None:
-        added_lengths = added_array.shape[1]
+        added_lengths = added_arrays[0].shape[1]
     free_count = free.sum(axis=1)
     resolved_lengths = np.minimum(free_count, added_lengths)
     free_index = nonzero_bounded_2d(free, resolved_lengths, lengths=free_count)
     array_index = (index[free_index[0]], free_index[1])
-    added_array_index = construct_block_mapping(resolved_lengths)
+    if added_array_valid is None:
+        added_array_index = construct_block_mapping(resolved_lengths)
+    else:
+        added_array_index = nonzero_bounded_2d(added_array_valid, resolved_lengths, lengths=added_lengths)
     for array, added_array in zip(arrays, added_arrays):
         if type(added_array) != np.ndarray:
             array[array_index] = added_array
@@ -201,7 +205,7 @@ class SparseProjection:
         candidate_priority = np.random.rand(len(learning_output), len(winner_input)).astype(np.float32)
         candidate_priority += bincount(
             np.repeat(np.arange(len(learning_output)), self.backprojection.size[1]) * len(winner_input) + backprojection_winner_macro.flatten(),
-            weights=learning_backprojection_valid.flatten() & backprojection_winner_macro.flatten(),
+            weights=learning_backprojection_valid.flatten() & backprojection_winner_macro_valid.flatten(),
             minLength=len(learning_output) * len(winner_input)
         ).reshape(candidate_priority.shape)
         
@@ -216,8 +220,8 @@ class SparseProjection:
 
         resolved_backprojections = replace_free(
             [self.backprojection, self.backprojection_permanence],
-            [candidate_prioritized, permanence_initial],
-            learning_output, ~learning_backprojection_valid, added_lengths=added_projections
+            [candidate, permanence_initial],
+            learning_output, ~learning_backprojection_valid, added_array_valid=candidate_valid, added_lengths=added_projections
         )
         # remaining_backprojections = added_projections - remaining_backprojections
         # max_remaining_backprojections = remaining_backprojections.max()

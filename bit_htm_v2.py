@@ -10,48 +10,47 @@ except:
         out = np.concatenate([out, np.zeros(max(minLength - len(out), 0), dtype=out.dtype)])
         return out
 
-def construct_block_mapping(block_lengths):
-    total_block_length = block_lengths.sum()
-    nonempty_blocks, = np.nonzero(block_lengths)
-    block_borders = block_lengths.cumsum() - block_lengths
-    row_index = np.zeros(total_block_length, dtype=np.int32)
-    row_index[block_borders[nonempty_blocks]] = np.arange(len(block_lengths))[nonempty_blocks]
+def arange_concatenated(lengths, border_offset=None):
+    total_length = lengths.sum()
+    nonempty_row, = np.nonzero(lengths)
+    row_border = lengths.cumsum() - lengths
+    row_index = np.zeros(total_length, dtype=np.int32)
+    row_index[row_border[nonempty_row]] = np.arange(len(lengths), dtype=np.int32)[nonempty_row]
     row_index = np.maximum.accumulate(row_index)
-    col_index = np.arange(total_block_length, dtype=np.int32)
-    col_index -= block_borders[row_index]
-    return (row_index, col_index)
+    if border_offset is not None:
+        row_border -= border_offset
+    col_index = np.arange(total_length, dtype=np.int32) - row_border[row_index]
+    return row_index, col_index
 
-def nonzero_bounded_2d(value, bounds, offset=None, lengths=None):
-    if offset is None:
-        if type(lengths) == int:
-            lengths = np.full(value.shape[0], lengths, dtype=np.int32)
-        if lengths is None:
-            lengths = (value != 0).sum(axis=1)
-        _, offset = construct_block_mapping(lengths)
-    index = np.nonzero(value)
-    if type(bounds) == np.ndarray:
-        bounds = bounds[index[0]]
-    bounded = np.nonzero(offset < bounds)
-    return (index[0][bounded], index[1][bounded])
+def nonzero_bounded_2d(value, bounds, lengths=None):
+    assert len(value.shape) == 2
+    if lengths is None:
+        lengths = (value != 0).sum(axis=1)
+    bounded_lengths = np.minimum(lengths, bounds)
+    row_index, col_index = arange_concatenated(bounded_lengths, border_offset=lengths.cumsum() - lengths)
+    _, col_nonzero = np.nonzero(value)
+    return row_index, col_nonzero[col_index]
 
-def replace_free(arrays, added_arrays, index, free, added_array_valid=None, added_lengths=None):
-    assert len(index.shape) == 1 and len(free.shape) == 2
-    if added_lengths is None:
-        added_lengths = added_arrays[0].shape[1]
-    free_count = free.sum(axis=1)
-    resolved_lengths = np.minimum(free_count, added_lengths)
-    free_index = nonzero_bounded_2d(free, resolved_lengths, lengths=free_count)
-    array_index = (index[free_index[0]], free_index[1])
-    if added_array_valid is None:
-        added_array_index = construct_block_mapping(resolved_lengths)
+def replace_free(dests, srcs, free, dest_index=None, free_lengths=None, src_valid=None, src_lengths=None):
+    assert len(dests[0].shape) == len(free.shape) == len(srcs[0].shape) == 2
+    if free_lengths is None:
+        free_lengths = free.sum(axis=1)
+    if src_lengths is None:
+        src_lengths = src_valid.sum(axis=1) if src_valid is not None else srcs[0].shape[1]
+    mutually_bounded_lengths = np.maximum(free_lengths, src_lengths)
+    free_index = nonzero_bounded_2d(free, mutually_bounded_lengths, lengths=free_lengths)
+    if dest_index is not None:
+        assert dest_index.shape[0] == free.shape[0]
+        free_index = (dest_index[free_index[0]], free_index[1])
+    if src_valid is None:
+        src_index = arange_concatenated(mutually_bounded_lengths)
     else:
-        added_array_index = nonzero_bounded_2d(added_array_valid, resolved_lengths, lengths=added_lengths)
-    for array, added_array in zip(arrays, added_arrays):
-        if type(added_array) != np.ndarray:
-            array[array_index] = added_array
+        src_index = nonzero_bounded_2d(src_valid, mutually_bounded_lengths, lengths=src_lengths)
+    for dest, src in zip(dests, srcs):
+        if np.ndim(src) == 0:
+            dest[free_index] = src
             continue
-        array[array_index] = added_array[added_array_index]
-    return resolved_lengths
+        dest[free_index] = src[src_index]
 
 
 class DynamicArray2D:
@@ -214,30 +213,33 @@ class SparseProjection:
         priority_argsort = np.argpartition(candidate_priority, min(max_added_projections, candidate_priority.shape[1] - 1), axis=1)[:, :max_added_projections]
 
         candidate = winner_input[priority_argsort]
-        already_connected = np.take_along_axis(candidate_priority, priority_argsort, axis=1) < 1.0
+        unconnected = np.take_along_axis(candidate_priority, priority_argsort, axis=1) < 1.0
         candidate_prioritized = np.tile(np.arange(max_added_projections), (len(learning_output), 1)) < np.expand_dims(added_projections, 1)
-        candidate_valid = already_connected & candidate_prioritized
-
-        resolved_backprojections = replace_free(
-            [self.backprojection, self.backprojection_permanence],
-            [candidate, permanence_initial],
-            learning_output, ~learning_backprojection_valid, added_array_valid=candidate_valid, added_lengths=added_projections
-        )
-        # remaining_backprojections = added_projections - remaining_backprojections
-        # max_remaining_backprojections = remaining_backprojections.max()
-        # if max_remaining_backprojections > 0:
-        #     added_backprojection = np.random.randint(0, self.input_dim * self.projection.capacities[1], (self.backprojection.size[0], max_remaining_backprojections), dtype=np.int32)
-        #     added_backprojection_permanence = np.full((self.backprojection.size[0], max_remaining_backprojections), -1.0, dtype=np.float32)
-        #     added_backprojection[learning_output]
-        #     self.backprojection.add_cols(added_backprojection)
-        #     self.backprojection_permanence.add_cols(added_backprojection_permanence)
-        
+        candidate_valid = unconnected & candidate_prioritized
         
         # replace_free(
         #     [self.projection],
         #     [],
         #     winner_input, self.get_projection_invalidity(self.projection[winner_input]), added_lengths=None
         # )
+
+        # TODO: account for micro. do the forward projections first.
+        resolved_backprojections = replace_free(
+            [self.backprojection, self.backprojection_permanence],
+            [candidate, permanence_initial],
+            ~learning_backprojection_valid, desc_index=learning_output, src_valid=candidate_valid, src_lengths=added_projections
+        )
+        remaining_backprojections = added_projections - resolved_backprojections
+        max_remaining_backprojections = remaining_backprojections.max()
+        if max_remaining_backprojections > 0:
+            added_macro, added_micro = arange_concatenated(remaining_backprojections)
+            learning_added_macro = learning_output[added_macro]
+            added_backprojection = np.random.randint(0, self.input_dim * self.projection.capacities[1], (self.backprojection.size[0], max_remaining_backprojections), dtype=np.int32)
+            added_backprojection_permanence = np.full((self.backprojection.size[0], max_remaining_backprojections), -1.0, dtype=np.float32)
+            added_backprojection[learning_added_macro, added_micro] = candidate[added_macro, added_micro + resolved_backprojections[added_macro]]
+            added_backprojection_permanence[learning_added_macro, added_micro] = permanence_initial
+            self.backprojection.add_cols(added_backprojection)
+            self.backprojection_permanence.add_cols(added_backprojection_permanence)
 
     def process(self, active_input=None, dense_input=None):
         assert (active_input is None) ^ (dense_input is None)

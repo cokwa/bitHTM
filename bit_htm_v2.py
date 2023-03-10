@@ -210,13 +210,19 @@ class SparseProjection:
         
         added_projections = np.clip(min_active_projections - input_activation[learning_backprojection_macro].sum(axis=1), 0, min(min_active_projections, len(winner_input)))
         max_added_projections = added_projections.max()
-        priority_argsort = np.argpartition(candidate_priority, min(max_added_projections, candidate_priority.shape[1] - 1), axis=1)[:, :max_added_projections]
+        prioritized_candidate = np.argpartition(candidate_priority, min(max_added_projections, candidate_priority.shape[1] - 1), axis=1)[:, :max_added_projections]
 
-        candidate = winner_input[priority_argsort]
-        unconnected = np.take_along_axis(candidate_priority, priority_argsort, axis=1) < 1.0
+        candidate = winner_input[prioritized_candidate]
+        unconnected = np.take_along_axis(candidate_priority, prioritized_candidate, 1) < 1.0
         candidate_prioritized = np.tile(np.arange(max_added_projections), (len(learning_output), 1)) < np.expand_dims(added_projections, 1)
-        candidate_valid = unconnected & candidate_prioritized
+        candidate_picked = unconnected & candidate_prioritized
         
+        winner_input_projection_added = np.zeros((len(winner_input), len(learning_output)), dtype=np.bool_)
+        np.put_along_axis(winner_input_projection_added, prioritized_candidate, candidate_picked, 0) # ??
+        winner_input_added_projections = bincount(prioritized_candidate.flatten(), weights=candidate_picked.flatten(), minLength=len(winner_input)) > 0.5
+        new_projection = np.empty((len(winner_input), winner_input_added_projections.max()), dtype=np.int32)
+        new_projection[arange_concatenated(winner_input_added_projections)] = 
+
         # replace_free(
         #     [self.projection],
         #     [],
@@ -227,19 +233,19 @@ class SparseProjection:
         resolved_backprojections = replace_free(
             [self.backprojection, self.backprojection_permanence],
             [candidate, permanence_initial],
-            ~learning_backprojection_valid, desc_index=learning_output, src_valid=candidate_valid, src_lengths=added_projections
+            ~learning_backprojection_valid, desc_index=learning_output, src_valid=candidate_picked, src_lengths=added_projections
         )
         remaining_backprojections = added_projections - resolved_backprojections
         max_remaining_backprojections = remaining_backprojections.max()
         if max_remaining_backprojections > 0:
             added_macro, added_micro = arange_concatenated(remaining_backprojections)
             learning_added_macro = learning_output[added_macro]
-            added_backprojection = np.random.randint(0, self.input_dim * self.projection.capacities[1], (self.backprojection.size[0], max_remaining_backprojections), dtype=np.int32)
-            added_backprojection_permanence = np.full((self.backprojection.size[0], max_remaining_backprojections), -1.0, dtype=np.float32)
-            added_backprojection[learning_added_macro, added_micro] = candidate[added_macro, added_micro + resolved_backprojections[added_macro]]
-            added_backprojection_permanence[learning_added_macro, added_micro] = permanence_initial
-            self.backprojection.add_cols(added_backprojection)
-            self.backprojection_permanence.add_cols(added_backprojection_permanence)
+            new_backprojection = np.random.randint(0, self.input_dim * self.projection.capacities[1], (self.backprojection.size[0], max_remaining_backprojections), dtype=np.int32)
+            new_backprojection_permanence = np.full((self.backprojection.size[0], max_remaining_backprojections), -1.0, dtype=np.float32)
+            new_backprojection[learning_added_macro, added_micro] = candidate[added_macro, added_micro + resolved_backprojections[added_macro]]
+            new_backprojection_permanence[learning_added_macro, added_micro] = permanence_initial
+            self.backprojection.add_cols(new_backprojection)
+            self.backprojection_permanence.add_cols(new_backprojection_permanence)
 
     def process(self, active_input=None, dense_input=None):
         assert (active_input is None) ^ (dense_input is None)

@@ -295,14 +295,21 @@ class SparseProjection:
             self.backprojection.add_cols(backprojection_new)
             self.backprojection_permanence.add_cols(backprojection_permanence_new)
 
-    def process(self, active_input=None, dense_input=None):
+    def process(self, active_input=None, dense_input=None, invoked_output=None, permanence_threshold=None):
         assert (active_input is None) ^ (dense_input is None)
+        if (invoked_output is not None and dense_input is None) or (permanence_threshold is not None and invoked_output is None):
+            raise NotImplementedError()
+
+        if invoked_output is not None:
+            backprojection_weight = self.backprojection_permanence[invoked_output] >= permanence_threshold if permanence_threshold is not None else np.bool_(True)
+            backprojection_macro = self.backprojection[invoked_output] // self.projection.capacities[1]
+            projected = (dense_input[backprojection_macro] & backprojection_weight).sum(axis=1)
+            return projected
+
         if dense_input is not None:
             active_input = np.nonzero(dense_input)
-
         active_projection, active_weight = self.decompose_flaggable_projection(self.projection[active_input].flatten())
         projected = bincount(active_projection, weights=active_weight, minLength=self.output_dim)        
-        
         assert projected.shape[0] == self.output_dim
         return projected
 
@@ -321,6 +328,102 @@ class SparseProjection:
                 input_activation, learning_output, winner_input, permanence_initial, min_active_projections,
                 learning_backprojection_macro=learning_backprojection_macro, learning_backprojection_valid=learning_backprojection_valid
             )
+
+
+class PredictiveProjection:
+    class State:
+        def __init__(self, prediction, potential, segment_potential, matching_segment, matching_segment_activation):
+            self.prediction = prediction
+            self.potential = potential
+            self.segment_potential = segment_potential
+            self.matching_segment = matching_segment
+            self.matching_segment_activation = matching_segment_activation
+            self.max_jittered_potential = None
+            self.matching_segment_jittered_potential = None
+
+    segment_group_dtype = np.int32
+    group_segment_dtype = np.int32
+
+    def __init__(
+        self, output_dim,
+        permanence_initial=0.01, permanence_threshold=0.5, permanence_increment=0.3, permanence_decrement=0.05, permanence_punishment=0.01,
+        segment_activation_threshold=10, segment_matching_threshold=10, segment_sampling_synapses=20,
+        group_segment_exponential_growth=True
+    ):
+        assert segment_activation_threshold >= segment_matching_threshold
+
+        self.output_dim = output_dim
+
+        self.permanence_initial = permanence_initial
+        self.permanence_threshold = permanence_threshold
+        self.permanence_increment = permanence_increment
+        self.permanence_decrement = permanence_decrement
+        self.permanence_punishment = permanence_punishment
+
+        self.segment_activation_threshold = segment_activation_threshold
+        self.segment_matching_threshold = segment_matching_threshold
+        self.segment_sampling_synapses = segment_sampling_synapses
+
+        self.segment_projection = SparseProjection(self.output_dim)
+        self.segment_group = DynamicArray2D(self.segment_group_dtype, size=(0, 1), exponential_growths=(group_segment_exponential_growth, False))
+        self.group_segments = np.zeros(self.output_dim, dtype=self.group_segment_dtype)
+
+    def store_jittered_potential_info(self, state, matching_segment_group=None):
+        if state.max_jittered_potential is not None and state.matching_segment_jittered_potential:
+            return
+        if matching_segment_group is None:
+            matching_segment_group = self.segment_group[state.matching_segment].squeeze(1)
+        matching_segment_jittered_potential = state.segment_potential[state.matching_segment].astype(np.float32)
+        matching_segment_jittered_potential += np.random.rand(*state.matching_segment.shape)
+        max_jittered_potential = np.zeros(self.output_dim, dtype=np.float32)
+        np.maximum.at(max_jittered_potential, matching_segment_group, matching_segment_jittered_potential)
+        state.max_jittered_potential = max_jittered_potential
+        state.matching_segment_jittered_potential = matching_segment_jittered_potential
+
+    def process(self, active_input, dense_input, return_jittered_potential_info=True):
+        segment_potential = self.segment_projection.process(active_input=active_input)
+        matching_segment, = np.where(segment_potential >= self.segment_matching_threshold)
+        matching_segment_group = self.segment_group[matching_segment].squeeze(1)
+        matching_segment_activation = self.segment_projection.process(dense_input=dense_input, invoked_output=matching_segment, permanence_threshold=self.permanence_threshold)
+        prediction = bincount(matching_segment_group, weights=matching_segment_activation >= self.segment_activation_threshold, minLength=self.output_dim)
+        potential = bincount(matching_segment_group, minLength=self.output_dim)
+        state = self.State(prediction, potential, segment_potential, matching_segment, matching_segment_activation)
+        if return_jittered_potential_info:
+            self.store_jittered_potential_info(state, matching_segment_group=matching_segment_group)
+        return state
+
+    def update(self, prev_state, input_activation, output_activation, winner_input=None, winner_output=None):
+        if prev_state is None:
+            return
+        assert winner_input is None or (winner_output is not None and winner_input is not None)
+
+        matching_segment_group_activation = output_activation[self.segment_group[prev_state.matching_segment].squeeze(1)]
+        learning_segment, = np.where(matching_segment_group_activation)
+        punished_segment, = np.where((~matching_segment_group_activation) & (prev_state.matching_segment_activation >= self.segment_activation_threshold))
+        learning_segment = prev_state.matching_segment[learning_segment]
+        punished_segment = prev_state.matching_segment[punished_segment]
+
+        if winner_output is not None:
+            output_matching = prev_state.potential[winner_output] > 0
+            unanticipated_output, = np.where(~output_matching)
+            unanticipated_output = winner_output[unanticipated_output]
+
+            # TODO: append best matching segments to learning_segment
+
+            self.segment_group.add_rows(np.expand_dims(unanticipated_output, 1))
+            self.group_segments[unanticipated_output] += 1
+
+        self.segment_projection.update(
+            input_activation, learning_segment, winner_input=winner_input, added_output_dim=len(unanticipated_output),
+            permanence_initial=self.permanence_initial,
+            permanence_chage_active=self.permanence_increment, permanence_change_inactive=(-self.permanence_decrement),
+            min_active_projections=self.segment_sampling_synapses
+        )
+
+        self.segment_projection.update(
+            input_activation, punished_segment,
+            permanence_chage_active=(-self.permanence_punishment), permanence_change_inactive=0.0
+        )
 
 
 class ExponentialBoosting:
@@ -379,45 +482,94 @@ class SpatialPooler:
             self.proximal_projection.update(input, active_column)
         self.boosting.update(active_column)
 
-        return SpatialPooler.State(overlaps, boosted_overlaps, active_column)
+        return self.State(overlaps, boosted_overlaps, active_column)
 
 
 class TemporalMemory:
     class State:
-        def __init__(self):
-            pass
+        def __init__(self, distal_state, active_column_bursting, cell_activation, cell_prediction, active_cell, winner_cell=None):
+            self.distal_state = distal_state
+            self.active_column_bursting = active_column_bursting
+            self.cell_activation = cell_activation
+            self.cell_prediction = cell_prediction
+            self.active_cell = active_cell
+            self.winner_cell = winner_cell
 
-    # TODO: active_columns is temp
     def __init__(
-        self, column_dim, cell_dim,
-        segment_matching_threshold=10, segment_activation_threshold=10, segment_sampling_synapses=20,
-        permanence_initial=0.01, permanence_threshold=0.5, permanence_increment=0.3, permanence_decrement=0.05, permanence_punishment=0.01
+        self, column_dim, cell_dim
     ):
         self.column_dim = column_dim
         self.cell_dim = cell_dim
 
-        self.segment_matching_threshold = segment_matching_threshold
-        self.segment_activation_threshold = segment_activation_threshold
-        self.segment_sampling_synapses = segment_sampling_synapses
+        self.distal_projection = PredictiveProjection(self.column_dim * self.cell_dim)
 
-        self.permanence_initial = permanence_initial
-        self.permanence_threshold = permanence_threshold
-        self.permanence_increment = permanence_increment
-        self.permanence_decrement = permanence_decrement
-        self.permanence_punishment = permanence_punishment
-        
-        
+        self.last_state = self.State(
+            None,
+            np.empty(0, dtype=np.bool_),
+            np.zeros((self.column_dim, self.cell_dim), dtype=np.bool_),
+            np.zeros((self.column_dim, self.cell_dim), dtype=np.bool_),
+            (np.empty(0, dtype=np.int32), np.empty(0, dtype=np.int32))
+        )
 
-        self.last_state = TemporalMemory.State()
+    def flatten_cell(self, cell):
+        if cell is None:
+            return None
+        assert len(cell) == 2 and len(cell[0].shape) == 1
+        return cell[0] * self.cell_dim + cell[1]
 
-    # TODO: implement return_winner_cell for real
+    def evaluate_backup_winner_cell(self, predictive_projection, prev_projection_state, relevant_column):
+        cell_segments = predictive_projection.group_segments.reshape(self.column_dim, self.cell_dim)
+        cell_segments_jittered = cell_segments[relevant_column].astype(np.float32)
+        cell_segments_jittered += np.random.rand(*cell_segments_jittered.shape)
+        cell_least_used = np.zeros((len(relevant_column), self.cell_dim), dtype=np.bool_)
+        np.put_along_axis(cell_least_used, np.expand_dims(cell_segments_jittered.argmax(axis=1), 1), True, axis=1)
+
+        if prev_projection_state is None:
+            return cell_least_used
+
+        predictive_projection.store_jittered_potential_info(prev_projection_state)
+        cell_max_jittered_potential = prev_projection_state.max_jittered_potential.reshape(self.column_dim, self.cell_dim)
+        cell_max_jittered_potential = cell_max_jittered_potential[relevant_column]
+        max_jittered_potential_cell = np.expand_dims(cell_max_jittered_potential.argmax(axis=1), 1)
+        column_max_jittered_potential = np.take_along_axis(cell_max_jittered_potential, max_jittered_potential_cell, axis=1)
+        column_matching = column_max_jittered_potential >= predictive_projection.segment_matching_threshold
+        cell_best_matching = np.zeros((len(relevant_column), self.cell_dim), dtype=np.bool_)
+        np.put_along_axis(cell_best_matching, max_jittered_potential_cell, True, axis=1)
+
+        return np.where(column_matching, cell_best_matching, cell_least_used)
+
     def process(self, sp_state, prev_state=None, learning=True, return_winner_cell=True):
         if prev_state is None:
             prev_state = self.last_state
 
-        
+        active_column_cell_prediction = prev_state.cell_prediction[sp_state.active_column]
+        active_column_bursting = active_column_cell_prediction.min(axis=1, keepdims=True) == 0
+        active_column_cell_activation = active_column_cell_prediction | active_column_bursting
 
-        curr_state = TemporalMemory.State()
+        active_cell = np.where(active_column_cell_activation)
+        active_cell = (sp_state.active_column[active_cell[0]], active_cell[1])
+        cell_activation = np.zeros((self.column_dim, self.cell_dim), dtype=np.bool_)
+        cell_activation[active_cell] = True
+
+        if learning or return_winner_cell:
+            active_column_cell_winner = active_column_cell_prediction | (
+                active_column_bursting & self.evaluate_backup_winner_cell(self.distal_projection, prev_state.distal_state, sp_state.active_column)
+            )
+            winner_cell = np.where(active_column_cell_winner)
+            winner_cell = (sp_state.active_column[winner_cell[0]], winner_cell[1])
+
+        if learning:
+            self.distal_projection.update(
+                prev_state.distal_state, prev_state.cell_activation.flatten(), cell_activation.flatten(),
+                winner_input=self.flatten_cell(prev_state.winner_cell), winner_output=self.flatten_cell(winner_cell)
+            )
+
+        distal_state = self.distal_projection.process(self.flatten_cell(active_cell), cell_activation.flatten(), return_jittered_potential_info=return_winner_cell)
+        cell_prediction = distal_state.prediction.reshape(self.column_dim, self.cell_dim)
+        curr_state = self.State(distal_state, active_column_bursting, cell_activation, cell_prediction, active_cell)
+        if learning or return_winner_cell:
+            curr_state.winner_cell = winner_cell
+
         self.last_state = curr_state
         return curr_state
 
@@ -448,12 +600,12 @@ if __name__ == '__main__':
 
     for epoch in range(100):
         for curr_input in inputs:
-            prev_column_prediction = htm.temporal_memory.last_state.cell_prediction.any(axis=1)
+            prev_column_prediction = htm.temporal_memory.last_state.cell_prediction.max(axis=1)
             
             noisy_input = curr_input # ^ (np.random.rand(*curr_input.shape) < 0.05)
             sp_state, tm_state = htm.process(noisy_input)
 
-            burstings = tm_state.column_bursting.sum()
+            burstings = tm_state.active_column_bursting.sum()
             corrects = prev_column_prediction[sp_state.active_column].sum()
             incorrects = prev_column_prediction.sum() - corrects
             print(burstings, corrects, incorrects)

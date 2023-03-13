@@ -161,40 +161,43 @@ class DenseProjection:
 class SparseProjection:
     projection_dtype = np.int32
     backprojection_dtype = np.int32
-    projection_invalid_flag = np.int64(0x1) << 31
+    projection_invalid_flag = projection_dtype(0x1) << 31
 
     def __init__(
         self, input_dim, output_dim=0,
-        projection_exponential_growth=False, output_exponential_growth=True
+        projection_exponential_growth=True, output_exponential_growth=True
     ):
         self.input_dim = input_dim
         self.output_dim = output_dim
 
+        # TODO: macro, micro for projection, not backprojection
+
         def on_projection_grow(new_values, new_size, new_capacities, axis):
             assert axis == 1
             assert np.log2(self.input_dim * new_capacities[1]) <= 31
-            new_values[:, self.projection.capacities[1]:new_capacities[1]] = np.random.randint(
+            new_values[:, new_size[1]:new_capacities[1]] = np.random.randint(
                 0, self.output_dim,
-                (self.projection.capacities[0], new_capacities[1] - self.projection.capacities[1]), dtype=self.projection_dtype
-            )
+                (self.projection.capacities[0], new_capacities[1] - new_size[1]), dtype=self.projection_dtype
+            ) | self.projection_invalid_flag
             macro, micro = divmod(self.backprojection[:], self.projection.capacities[1])
             self.backprojection[:] = macro * new_capacities[1] + micro
 
         def on_backprojection_grow(new_values, new_size, new_capacities, axis):
             index = [slice(None)]
-            index.insert(axis, slice(self.backprojection.capacities[axis], new_capacities[axis]))
+            index.insert(axis, slice(new_size[axis], new_capacities[axis]))
             empty_size = [self.backprojection.capacities[1 - axis]]
-            empty_size.insert(axis, new_capacities[axis] - self.backprojection.capacities[axis])
+            empty_size.insert(axis, new_capacities[axis] - new_size[axis])
             new_values[tuple(index)] = np.random.randint(0, self.input_dim * self.projection.capacities[1], tuple(empty_size), dtype=self.backprojection_dtype)
 
         def on_backprojection_permanence_grow(new_values, new_size, new_capacities, axis):
             index = [slice(None)]
-            index.insert(axis, slice(self.backprojection_permanence.capacities[axis], new_capacities[axis]))
+            index.insert(axis, slice(new_size[axis], new_capacities[axis]))
             new_values[tuple(index)] = -1.0
 
         self.projection = DynamicArray2D(self.projection_dtype, size=(self.input_dim, 0), exponential_growths=(False, projection_exponential_growth), on_grow=on_projection_grow)
         self.backprojection = DynamicArray2D(self.backprojection_dtype, size=(self.output_dim, 0), exponential_growths=[output_exponential_growth, projection_exponential_growth], on_grow=on_backprojection_grow)
         self.backprojection_permanence = DynamicArray2D(np.float32, size=(self.output_dim, 0), exponential_growths=[output_exponential_growth, projection_exponential_growth], on_grow=on_backprojection_permanence_grow)
+        self.backprojection_valids = DynamicArray2D(self.backprojection_dtype, size=(self.output_dim, 1), exponential_growths=[output_exponential_growth, False]) # TODO
 
     def get_pure_projection(self, flaggable_projection):
         return flaggable_projection & (~self.projection_invalid_flag)
@@ -208,12 +211,20 @@ class SparseProjection:
     def decompose_flaggable_projection(self, flaggable_projection):
         return self.get_pure_projection(flaggable_projection), self.get_projection_validity(flaggable_projection)
 
-    def add_output_dim(self, added_output_dim):
-        assert added_output_dim >= 0
-        self.output_dim += added_output_dim
+    def add_output(self, added_outputs, valids_threshold):
+        assert added_outputs >= 0
+        # replaced_output, = np.where(self.backprojection_valids[:].squeeze(1) < valids_threshold)
+        # replaced_output = replaced_output[:added_outputs]
+        # # TODO: reset
+        # added_outputs -= len(replaced_output)
+        # if added_outputs == 0:
+        #     return replaced_output
+        self.output_dim += added_outputs
         assert np.log2(self.output_dim) <= 31
-        self.backprojection.add_rows(np.random.randint(0, self.input_dim * self.projection.capacities[1], (added_output_dim, self.backprojection.size[1]), dtype=self.backprojection.dtype))
-        self.backprojection_permanence.add_rows(np.full((added_output_dim, self.backprojection.size[1]), -1.0, dtype=self.backprojection_permanence.dtype))
+        self.backprojection.add_rows(np.random.randint(0, self.input_dim * self.projection.capacities[1], (added_outputs, self.backprojection.size[1]), dtype=self.backprojection.dtype))
+        self.backprojection_permanence.add_rows(np.full((added_outputs, self.backprojection.size[1]), -1.0, dtype=self.backprojection_permanence.dtype))
+        # return np.concatenate([replaced_output, np.arange(self.output_dim - added_outputs, self.output_dim)])
+        return np.empty(0, dtype=np.int32), np.arange(self.output_dim - added_outputs, self.output_dim)
 
     def update_permanence(self, input_activation, learning_output, permanence_chage_active, permanence_change_inactive, return_projection_info=False):
         learning_backprojection_macro, learning_backprojection_micro = divmod(self.backprojection[learning_output], self.projection.capacities[1])
@@ -223,17 +234,19 @@ class SparseProjection:
         naive_permanence_change = backprojected_activation * (permanence_chage_active - permanence_change_inactive) + permanence_change_inactive
         updated_permanence = learning_backprojection_permanence + learning_backprojection_valid * naive_permanence_change
         self.backprojection_permanence[learning_output] = updated_permanence
-        self.projection.values[
-            learning_backprojection_macro,
-            learning_backprojection_micro
-        ] &= ((updated_permanence <= 0.0) * self.projection_invalid_flag) | (~self.projection_invalid_flag)
 
+        olphaned_learning_backprojection = np.where(learning_backprojection_valid & (updated_permanence <= 0.0))
+        self.projection.values[
+            learning_backprojection_macro[olphaned_learning_backprojection],
+            learning_backprojection_micro[olphaned_learning_backprojection]
+        ] |= self.projection_invalid_flag
+        
         if return_projection_info:
-            return learning_backprojection_macro, learning_backprojection_micro, learning_backprojection_permanence, learning_backprojection_valid
+            return learning_backprojection_macro, learning_backprojection_micro, updated_permanence
 
     def add_projections(
         self, input_activation, learning_output, winner_input, permanence_initial, min_active_projections,
-        learning_backprojection_macro=None, learning_backprojection_valid=None
+        learning_backprojection_macro=None, learning_backprojection_permanence=None
     ):
         if min(len(learning_output), len(winner_input)) == 0:
             return
@@ -241,8 +254,9 @@ class SparseProjection:
         assert permanence_initial >= 0.0
         if learning_backprojection_macro is None:
             learning_backprojection_macro = self.backprojection[learning_output] // self.projection.capacities[1]
-        if learning_backprojection_valid is None:
-            learning_backprojection_valid = self.backprojection_permanence[learning_output] > 0.0
+        if learning_backprojection_permanence is None:
+            learning_backprojection_permanence = self.backprojection_permanence[learning_output]
+        learning_backprojection_valid = learning_backprojection_permanence > 0.0
 
         learning_output_index = np.arange(len(learning_output))
         whole_input_to_winner = np.random.randint(0, len(winner_input), self.projection.size[0], dtype=self.projection_dtype) | self.projection_invalid_flag
@@ -256,6 +270,9 @@ class SparseProjection:
         ).reshape(candidate_priority.shape)
         
         added_backprojections = np.clip(min_active_projections - input_activation[learning_backprojection_macro].sum(axis=1), 0, min(min_active_projections, len(winner_input)))
+        # candidate_unconnected = candidate_priority < 1.0
+        # candidate_prioritized = np.argpartition(candidate_priority, added_backprojections.max(initial=0), axis=1) < np.expand_dims(added_backprojections, 1)
+        # candidate_picked = candidate_unconnected & candidate_prioritized
         max_added_backprojections = added_backprojections.max(initial=0)
         candidate_index_prioritized = np.argpartition(candidate_priority, max_added_backprojections, axis=1)[:, :max_added_backprojections]
         candidate_unconnected = candidate_priority < 1.0
@@ -314,27 +331,23 @@ class SparseProjection:
         return projected
 
     def update(
-        self, input_activation, learning_output, winner_input=None, added_output_dim=0,
+        self, input_activation, learning_output, winner_input=None,
         permanence_initial=0.01, permanence_chage_active=0.3, permanence_change_inactive=-0.05,
         min_active_projections=20
     ):
-        if added_output_dim > 0:
-            self.add_output_dim(added_output_dim)
-        learning_backprojection_macro, _, _, learning_backprojection_valid = self.update_permanence(
+        learning_backprojection_macro, _, learning_backprojection_permanence = self.update_permanence(
             input_activation, learning_output, permanence_chage_active, permanence_change_inactive, return_projection_info=True
         )
         if winner_input is not None:
             self.add_projections(
                 input_activation, learning_output, winner_input, permanence_initial, min_active_projections,
-                learning_backprojection_macro=learning_backprojection_macro, learning_backprojection_valid=learning_backprojection_valid
+                learning_backprojection_macro=learning_backprojection_macro, learning_backprojection_permanence=learning_backprojection_permanence
             )
-
 
 class PredictiveProjection:
     class State:
-        def __init__(self, prediction, potential, segment_potential, matching_segment, matching_segment_activation):
+        def __init__(self, prediction, segment_potential, matching_segment, matching_segment_activation):
             self.prediction = prediction
-            self.potential = potential
             self.segment_potential = segment_potential
             self.matching_segment = matching_segment
             self.matching_segment_activation = matching_segment_activation
@@ -368,8 +381,8 @@ class PredictiveProjection:
         self.segment_group = DynamicArray2D(self.segment_group_dtype, size=(0, 1), exponential_growths=(group_segment_exponential_growth, False))
         self.group_segments = np.zeros(self.output_dim, dtype=self.group_segment_dtype)
 
-    def store_jittered_potential_info(self, state, matching_segment_group=None):
-        if state.max_jittered_potential is not None and state.matching_segment_jittered_potential:
+    def ensure_jittered_potential_info(self, state, matching_segment_group=None):
+        if state.max_jittered_potential is not None and state.matching_segment_jittered_potential is not None:
             return
         if matching_segment_group is None:
             matching_segment_group = self.segment_group[state.matching_segment].squeeze(1)
@@ -386,35 +399,39 @@ class PredictiveProjection:
         matching_segment_group = self.segment_group[matching_segment].squeeze(1)
         matching_segment_activation = self.segment_projection.process(dense_input=dense_input, invoked_output=matching_segment, permanence_threshold=self.permanence_threshold)
         prediction = bincount(matching_segment_group, weights=matching_segment_activation >= self.segment_activation_threshold, minLength=self.output_dim)
-        potential = bincount(matching_segment_group, minLength=self.output_dim)
-        state = self.State(prediction, potential, segment_potential, matching_segment, matching_segment_activation)
+        state = self.State(prediction, segment_potential, matching_segment, matching_segment_activation)
         if return_jittered_potential_info:
-            self.store_jittered_potential_info(state, matching_segment_group=matching_segment_group)
+            self.ensure_jittered_potential_info(state, matching_segment_group=matching_segment_group)
         return state
 
-    def update(self, prev_state, input_activation, output_activation, winner_input=None, winner_output=None):
+    def update(self, prev_state, input_activation, learning_output, output_punishment, winner_input=None, output_learning=None, epsilon=1e-8):
         if prev_state is None:
             return
-        assert winner_input is None or (winner_output is not None and winner_input is not None)
+        if output_learning is None:
+            output_learning = np.zeros(self.output_dim, dtype=np.bool_)
+            output_learning[learning_output] = True
 
-        matching_segment_group_activation = output_activation[self.segment_group[prev_state.matching_segment].squeeze(1)]
-        learning_segment, = np.where(matching_segment_group_activation)
-        punished_segment, = np.where((~matching_segment_group_activation) & (prev_state.matching_segment_activation >= self.segment_activation_threshold))
+        matching_segment_group = self.segment_group[prev_state.matching_segment].squeeze(1)
+        self.ensure_jittered_potential_info(prev_state, matching_segment_group=matching_segment_group)
+        matching_segment_group_unpredicted = prev_state.prediction[matching_segment_group] < epsilon
+        matching_segment_best_matching = np.abs(prev_state.matching_segment_jittered_potential - prev_state.max_jittered_potential[matching_segment_group]) < epsilon
+        learning_segment, = np.where(output_learning[matching_segment_group] & ((prev_state.matching_segment_activation > 0) | (matching_segment_group_unpredicted & matching_segment_best_matching)))
+        punished_segment, = np.where(output_punishment[matching_segment_group])
         learning_segment = prev_state.matching_segment[learning_segment]
         punished_segment = prev_state.matching_segment[punished_segment]
 
-        if winner_output is not None:
-            output_matching = prev_state.potential[winner_output] > 0
-            unanticipated_output, = np.where(~output_matching)
-            unanticipated_output = winner_output[unanticipated_output]
-
-            # TODO: append best matching segments to learning_segment
-
-            self.segment_group.add_rows(np.expand_dims(unanticipated_output, 1))
-            self.group_segments[unanticipated_output] += 1
+        unaccounted_output, = np.where(prev_state.max_jittered_potential[learning_output] < epsilon)
+        if len(unaccounted_output) > 0:
+            unaccounted_output = learning_output[unaccounted_output]
+            replaced_segment, new_segment = self.segment_projection.add_output(len(unaccounted_output), self.segment_matching_threshold)
+            learning_segment = np.concatenate([learning_segment, replaced_segment, new_segment])
+            self.segment_group[replaced_segment] = np.expand_dims(unaccounted_output[:len(replaced_segment)], 1)
+            self.segment_group.add_rows(np.expand_dims(unaccounted_output[len(replaced_segment):], 1))
+            self.group_segments[replaced_segment] -= 1
+            self.group_segments[unaccounted_output] += 1
 
         self.segment_projection.update(
-            input_activation, learning_segment, winner_input=winner_input, added_output_dim=len(unanticipated_output),
+            input_activation, learning_segment, winner_input=winner_input,
             permanence_initial=self.permanence_initial,
             permanence_chage_active=self.permanence_increment, permanence_change_inactive=(-self.permanence_decrement),
             min_active_projections=self.segment_sampling_synapses
@@ -503,7 +520,10 @@ class TemporalMemory:
 
         self.distal_projection = PredictiveProjection(self.column_dim * self.cell_dim)
 
-        self.last_state = self.State(
+        self.last_state = self.get_empty_state()
+
+    def get_empty_state(self):
+        return self.State(
             None,
             np.empty(0, dtype=np.bool_),
             np.zeros((self.column_dim, self.cell_dim), dtype=np.bool_),
@@ -517,56 +537,57 @@ class TemporalMemory:
         assert len(cell) == 2 and len(cell[0].shape) == 1
         return cell[0] * self.cell_dim + cell[1]
 
-    def evaluate_backup_winner_cell(self, predictive_projection, prev_projection_state, relevant_column):
+    # TODO: split it up
+    def evaluate_backup_winner_cell(self, predictive_projection, prev_projection_state, relevant_column, epsilon=1e-8):
         cell_segments = predictive_projection.group_segments.reshape(self.column_dim, self.cell_dim)
         cell_segments_jittered = cell_segments[relevant_column].astype(np.float32)
         cell_segments_jittered += np.random.rand(*cell_segments_jittered.shape)
-        cell_least_used = np.zeros((len(relevant_column), self.cell_dim), dtype=np.bool_)
-        np.put_along_axis(cell_least_used, np.expand_dims(cell_segments_jittered.argmax(axis=1), 1), True, axis=1)
+        cell_least_used = np.abs(cell_segments_jittered - cell_segments_jittered.min(axis=1, keepdims=True)) < epsilon
 
         if prev_projection_state is None:
             return cell_least_used
 
-        predictive_projection.store_jittered_potential_info(prev_projection_state)
+        predictive_projection.ensure_jittered_potential_info(prev_projection_state)
         cell_max_jittered_potential = prev_projection_state.max_jittered_potential.reshape(self.column_dim, self.cell_dim)
         cell_max_jittered_potential = cell_max_jittered_potential[relevant_column]
-        max_jittered_potential_cell = np.expand_dims(cell_max_jittered_potential.argmax(axis=1), 1)
-        column_max_jittered_potential = np.take_along_axis(cell_max_jittered_potential, max_jittered_potential_cell, axis=1)
+        column_max_jittered_potential = cell_max_jittered_potential.max(axis=1, keepdims=True)
         column_matching = column_max_jittered_potential >= predictive_projection.segment_matching_threshold
-        cell_best_matching = np.zeros((len(relevant_column), self.cell_dim), dtype=np.bool_)
-        np.put_along_axis(cell_best_matching, max_jittered_potential_cell, True, axis=1)
+        cell_best_matching = np.abs(cell_max_jittered_potential - column_max_jittered_potential) < epsilon
 
         return np.where(column_matching, cell_best_matching, cell_least_used)
 
-    def process(self, sp_state, prev_state=None, learning=True, return_winner_cell=True):
+    def process(self, active_column, prev_state=None, learning=True, return_winner_cell=True, epsilon=1e-8):
         if prev_state is None:
             prev_state = self.last_state
 
-        active_column_cell_prediction = prev_state.cell_prediction[sp_state.active_column]
-        active_column_bursting = active_column_cell_prediction.min(axis=1, keepdims=True) == 0
+        active_column_cell_prediction = prev_state.cell_prediction[active_column]
+        active_column_bursting = ~active_column_cell_prediction.max(axis=1, keepdims=True)
         active_column_cell_activation = active_column_cell_prediction | active_column_bursting
 
         active_cell = np.where(active_column_cell_activation)
-        active_cell = (sp_state.active_column[active_cell[0]], active_cell[1])
+        active_cell = (active_column[active_cell[0]], active_cell[1])
         cell_activation = np.zeros((self.column_dim, self.cell_dim), dtype=np.bool_)
         cell_activation[active_cell] = True
 
         if learning or return_winner_cell:
             active_column_cell_winner = active_column_cell_prediction | (
-                active_column_bursting & self.evaluate_backup_winner_cell(self.distal_projection, prev_state.distal_state, sp_state.active_column)
+                active_column_bursting & self.evaluate_backup_winner_cell(self.distal_projection, prev_state.distal_state, active_column)
             )
             winner_cell = np.where(active_column_cell_winner)
-            winner_cell = (sp_state.active_column[winner_cell[0]], winner_cell[1])
+            winner_cell = (active_column[winner_cell[0]], winner_cell[1])
 
         if learning:
+            column_punishment = prev_state.cell_prediction.max(axis=1)
+            column_punishment[active_column] = False
             self.distal_projection.update(
-                prev_state.distal_state, prev_state.cell_activation.flatten(), cell_activation.flatten(),
-                winner_input=self.flatten_cell(prev_state.winner_cell), winner_output=self.flatten_cell(winner_cell)
+                prev_state.distal_state,
+                prev_state.cell_activation.flatten(), self.flatten_cell(winner_cell), np.repeat(column_punishment, self.cell_dim),
+                winner_input=self.flatten_cell(prev_state.winner_cell)
             )
 
         distal_state = self.distal_projection.process(self.flatten_cell(active_cell), cell_activation.flatten(), return_jittered_potential_info=return_winner_cell)
-        cell_prediction = distal_state.prediction.reshape(self.column_dim, self.cell_dim)
-        curr_state = self.State(distal_state, active_column_bursting, cell_activation, cell_prediction, active_cell)
+        cell_prediction = distal_state.prediction.reshape(self.column_dim, self.cell_dim) > epsilon
+        curr_state = self.State(distal_state, active_column_bursting.squeeze(1), cell_activation, cell_prediction, active_cell)
         if learning or return_winner_cell:
             curr_state.winner_cell = winner_cell
 
@@ -579,14 +600,15 @@ class HierarchicalTemporalMemory:
         self, input_dim, column_dim, cell_dim, active_columns=None,
         spatial_pooler=None, temporal_memory=None
     ):
-        active_columns = active_columns or round(column_dim * 0.02)
+        if active_columns is None:
+            active_columns = round(column_dim * 0.02)
 
         self.spatial_pooler = spatial_pooler or SpatialPooler(input_dim, column_dim, active_columns)
         self.temporal_memory = temporal_memory or TemporalMemory(column_dim, cell_dim)
 
     def process(self, input, learning=True):
         sp_state = self.spatial_pooler.process(input, learning=learning)
-        tm_state = self.temporal_memory.process(sp_state, learning=learning)
+        tm_state = self.temporal_memory.process(sp_state.active_column, learning=learning)
         return sp_state, tm_state
 
 
@@ -602,8 +624,12 @@ if __name__ == '__main__':
         for curr_input in inputs:
             prev_column_prediction = htm.temporal_memory.last_state.cell_prediction.max(axis=1)
             
-            noisy_input = curr_input # ^ (np.random.rand(*curr_input.shape) < 0.05)
+            noisy_input = curr_input ^ (np.random.rand(*curr_input.shape) < 0.05)
             sp_state, tm_state = htm.process(noisy_input)
+
+            print(htm.temporal_memory.distal_projection.segment_projection.projection[:].shape, htm.temporal_memory.distal_projection.segment_projection.backprojection[:].shape)
+            # print(np.unique(htm.temporal_memory.distal_projection.group_segments, return_counts=True))
+            print(((htm.temporal_memory.distal_projection.segment_projection.backprojection_permanence[:] > 0.0).sum(axis=1) < 10).sum())
 
             burstings = tm_state.active_column_bursting.sum()
             corrects = prev_column_prediction[sp_state.active_column].sum()

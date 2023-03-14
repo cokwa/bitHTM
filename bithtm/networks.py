@@ -103,9 +103,9 @@ class TemporalMemory:
         cell_activation[active_cell] = True
 
         if learning or return_winner_cell:
-            column_best_matching, cell_best_matching = self.evaluate_cell_best_matching(self.distal_projection, prev_state.distal_state, active_column, epsilon=epsilon)
+            column_matching, cell_best_matching = self.evaluate_cell_best_matching(self.distal_projection, prev_state.distal_state, active_column, epsilon=epsilon)
             least_used_cell = self.evaluate_cell_least_used(self.distal_projection, active_column, epsilon=epsilon)
-            active_column_cell_winner = active_column_cell_prediction | (active_column_bursting & np.where(column_best_matching, cell_best_matching, least_used_cell))
+            active_column_cell_winner = active_column_cell_prediction | (active_column_bursting & np.where(column_matching, cell_best_matching, least_used_cell))
             winner_cell = np.where(active_column_cell_winner)
             winner_cell = (active_column[winner_cell[0]], winner_cell[1])
 

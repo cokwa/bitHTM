@@ -6,14 +6,14 @@ class ExponentialBoosting:
         self, output_dim, active_units,
         intensity=0.2, momentum=0.99
     ):
-        self.sparsity = active_units / output_dim
+        self.density = active_units / output_dim
         self.intensity = intensity
         self.momentum = momentum
 
         self.duty_cycle = np.zeros(output_dim, dtype=np.float32)
 
     def process(self, input):
-        factor = np.exp(self.intensity * -self.duty_cycle / self.sparsity)
+        factor = np.exp(self.intensity * -self.duty_cycle / self.density)
         return factor * input
 
     def update(self, active):

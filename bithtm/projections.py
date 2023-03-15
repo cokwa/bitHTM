@@ -15,13 +15,13 @@ class DenseProjection:
 
         self.permanence = np.random.randn(output_dim, input_dim) * permanence_std + permanence_mean
 
-    def process(self, dense_input):
+    def process(self, input_activation):
         weight = self.permanence >= self.permanence_threshold
-        overlaps = (weight & dense_input).sum(axis=1)
+        overlaps = (weight & input_activation).sum(axis=1)
         return overlaps
 
-    def update(self, dense_input, learning_output):
-        self.permanence[learning_output] += dense_input * (self.permanence_increment + self.permanence_decrement) - self.permanence_decrement
+    def update(self, input_activation, learning_output):
+        self.permanence[learning_output] += input_activation * (self.permanence_increment + self.permanence_decrement) - self.permanence_decrement
 
 
 class SparseProjection:
@@ -31,7 +31,7 @@ class SparseProjection:
 
     def __init__(
         self, input_dim, output_dim=0,
-        projection_exponential_growth=True, output_exponential_growth=True
+        projection_growth_exponential=True, output_growth_exponential=True
     ):
         self.input_dim = input_dim
         self.output_dim = output_dim
@@ -62,10 +62,10 @@ class SparseProjection:
             index.insert(axis, slice(new_size[axis], new_capacity[axis]))
             new_values[tuple(index)] = -1.0
 
-        self.projection = DynamicArray2D(self.projection_dtype, size=(self.input_dim, 0), exponential_growths=(False, projection_exponential_growth), on_grow=on_projection_grow)
-        self.backprojection = DynamicArray2D(self.backprojection_dtype, size=(self.output_dim, 0), exponential_growths=[output_exponential_growth, projection_exponential_growth], on_grow=on_backprojection_grow)
-        self.backprojection_permanence = DynamicArray2D(np.float32, size=(self.output_dim, 0), exponential_growths=[output_exponential_growth, projection_exponential_growth], on_grow=on_backprojection_permanence_grow)
-        self.backprojection_valids = DynamicArray2D(self.backprojection_dtype, size=(self.output_dim, 1), exponential_growths=[output_exponential_growth, False]) # TODO
+        self.projection = DynamicArray2D(self.projection_dtype, size=(self.input_dim, 0), growth_exponentials=(False, projection_growth_exponential), on_grow=on_projection_grow)
+        self.backprojection = DynamicArray2D(self.backprojection_dtype, size=(self.output_dim, 0), growth_exponentials=[output_growth_exponential, projection_growth_exponential], on_grow=on_backprojection_grow)
+        self.backprojection_permanence = DynamicArray2D(np.float32, size=(self.output_dim, 0), growth_exponentials=[output_growth_exponential, projection_growth_exponential], on_grow=on_backprojection_permanence_grow)
+        self.backprojection_valids = DynamicArray2D(self.backprojection_dtype, size=(self.output_dim, 1), growth_exponentials=[output_growth_exponential, False]) # TODO
 
     def get_pure_projection(self, flaggable_projection):
         return flaggable_projection & (~self.projection_invalid_flag)
@@ -224,85 +224,70 @@ class SparseProjection:
 
 
 class Projection:
-    invalid_connection_flag = np.int32(0x1) << 31
+    edge_invalid_flag = np.uint32(0x1) << 31
 
     def __init__(
         self, input_dim, output_dim=0,
-        output_exponential_growth=True, connection_exponential_growth=True
+        output_growth_exponential=True, edge_growth_exponential=True
     ):
         self.input_dim = input_dim
         self.output_dim = output_dim
 
-        self.forward_connection = DynamicArray2D(np.int32, size=(self.input_dim + 1, 0), exponential_growths=(False, connection_exponential_growth), on_grow=self.on_forward_connection_grow)
-        
-        self.backward_connections = DynamicArray2D(np.int32, size=(self.output_dim, 1), exponential_growths=(output_exponential_growth, False))
-        self.backward_connection = DynamicArray2D(np.int32, size=(self.output_dim, 0), exponential_growths=(output_exponential_growth, connection_exponential_growth))
-        self.backward_permanence = DynamicArray2D(np.float32, size=(self.output_dim, 0), exponential_growths=(output_exponential_growth, connection_exponential_growth))
+        self.max_input_edges = 0
+        self.input_edge = DynamicArray2D(np.uint32, size=(self.input_dim, 0), growth_exponential=(False, edge_growth_exponential))
+        self.free_input_edge = DynamicArray2D(np.uint32, size=(0, 1), growth_exponential=(edge_growth_exponential, False))
 
-    def on_forward_connection_grow(self, new_values, new_size, new_capacity, axis):
-        assert axis == 1
-        self.backward_connection[:] = self.merge_backward_connection(*self.split_backward_connection(self.backward_connection[:]), forward_connection_capacity=new_capacity[1])
+        self.output_edges = DynamicArray2D(np.int32, size=(self.output_dim, 1), growth_exponential=(output_growth_exponential, False))
+        self.output_edge = DynamicArray2D(np.uint32, size=(self.output_dim, 0), growth_exponential=(output_growth_exponential, edge_growth_exponential))
+        self.output_permanence = DynamicArray2D(np.float32, size=(self.output_dim, 0), growth_exponential=(output_growth_exponential, edge_growth_exponential))
 
-    def get_forward_connection_invalid(self, connection):
-        return (connection & self.invalid_connection_flag) != 0x0
+    def get_input_edge_valid(self, input_edge):
+        return (input_edge & self.edge_invalid_flag) == 0x0
 
-    def get_forward_connection_output(self, connection):
-        return connection & (~self.invalid_connection_flag)
+    def get_input_edge_target(self, input_edge):
+        return input_edge & (~self.edge_invalid_flag)
 
-    def split_forward_connection(self, forward_connection):
-        return self.get_forward_connection_invalid(forward_connection), self.get_forward_connection_output(forward_connection)
+    def unpack_output_edge(self, output_edge):
+        input_edge, target_input = np.divmod(output_edge, self.input_dim)
+        return target_input, input_edge
 
-    def split_backward_connection(self, backward_connection, forward_connection_capacity=None):
-        if forward_connection_capacity is None:
-            forward_connection_capacity = self.forward_connection.capacity[1]
-        return divmod(backward_connection, forward_connection_capacity)
+    def supply_input_edge(self, supplied_edges):
+        free_edge = self.free_input_edge.pop_rows(supplied_edges).squeeze(1)
+        supplied_edges -= len(free_edge)
+        if supplied_edges == 0:
+            return free_edge
 
-    def merge_backward_connection(self, backward_connection_input, backward_connection_meta, forward_connection_capacity=None):
-        if forward_connection_capacity is None:
-            forward_connection_capacity = self.forward_connection.capacity[1]
-        return backward_connection_input * forward_connection_capacity + backward_connection_meta
-
-    def get_backward_connection(self, index, forward_connection_capacity=None):
-        return self.split_backward_connection(self.backward_connection[index], forward_connection_capacity=forward_connection_capacity)
-
-    def set_backward_connection(self, index, backward_connection_input, backward_connection_meta, forward_connection_capacity=None):
-        self.backward_connection[index] = self.merge_backward_connection(backward_connection_input, backward_connection_meta, forward_connection_capacity=forward_connection_capacity)
-
-    def add_output(self, added_outputs, connection_threshold):
-        replaced_output, = np.where(self.backward_connections[:].squeeze(1) < connection_threshold)
+    def add_output(self, added_outputs, edges_valid_threshold):
+        replaced_output, = np.where(self.output_edges[:].squeeze(1) < edges_valid_threshold)
         replaced_output = replaced_output[:added_outputs]
-        self.forward_connection[self.get_backward_connection(replaced_output)] |= self.invalid_connection_flag
-        self.backward_connections[replaced_output] = 0
-        self.backward_permanence[replaced_output] = -1.0
+        self.output_edges[replaced_output] = 0
+        target_input, input_edge = self.unpack_output_edge(self.output_edge[replaced_output])
+        self.input_edge[target_input, input_edge] |= self.edge_invalid_flag
+
         added_outputs -= len(replaced_output)
         if added_outputs == 0:
-            return replaced_output, np.empty(0, dtype=self.forward_connection.dtype)
+            return replaced_output, np.empty(0, dtype=np.int32)
 
-        self.output_dim += replaced_output
-        self.backward_connections.add_rows(np.zeros((added_outputs, 1), dtype=np.int32))
-        self.backward_connection.add_rows(np.random.randint(0, self.input_dim * self.forward_connection.size[1], (added_outputs, self.backward_connection.size[1]), dtype=self.backward_connection.dtype))
-        self.backward_permanence.add_rows(np.full((added_outputs, self.backward_connection.size[1]), -1.0, dtype=np.float32))
-        return replaced_output, np.arange(self.output_dim - added_output, self.output_dim)
+        self.output_edges.add_rows(np.zeros((self.ouput_dim, 1), dtype=self.output_edges.dtype))
+        self.output_edge.add_rows()
 
-    def update_permanence(self, input_activation, learning_output, permanence_change_active=0.3, permanence_change_inactive=-0.05):
-        connection_input, connection_meta = self.get_backward_connection(learning_output)
-        permanence = self.backward_permanence[learning_output]
-        permanece_valid = permanence > 0.0
-        naive_permanence_change = input_activation[connection_input] * (permanence_change_active + permanence_change_inactive) - permanence_change_inactive
-        updated_permanence = permanence + permanece_valid * naive_permanence_change
-        updated_permanence_valid = updated_permanence > 0.0
-        self.backward_permanence[learning_output] = updated_permanence
-        # TODO
-        # self.forward_weight[connection_input, connection_meta] = 
-        self.backward_connections[learning_output] -= (~updated_permanence_valid).sum(axis=1, keepdims=True)
+    def update_permanence(self, input_activation, learning_output, active_edge_permanence_change, inactive_edge_permanence_change):
+        learning_edge_target, learning_input_edge = self.unpack_output_edge(self.output_edge[learning_output])
+        learning_edge_activation = input_activation[learning_edge_target]
+        learning_edge_permanence = self.output_permanence[learning_output]
+        naive_permanence_change = learning_edge_activation * (active_edge_permanence_change - inactive_edge_permanence_change) + inactive_edge_permanence_change
+        updated_permanence = learning_edge_permanence + (learning_edge_permanence > 0.0) * naive_permanence_change
+        self.output_permanence[learning_output] = updated_permanence
+        self.input_edge[learning_edge_target, learning_input_edge] |= (updated_permanence <= 0.0) * self.edge_invalid_flag
 
     def process(self, active_input):
-        active_connection = self.forward_connection[active_input]
-        active_weight = self.forward_weight[active_input]
-        projected = bincount(active_connection, weights=active_weight, minlength=self.output_dim)
+        active_edge = self.input_edge[active_input]
+        edge_target = self.get_input_edge_target(active_edge)
+        edge_valid = self.get_input_edge_valid(active_edge)
+        projected = bincount(edge_target.flatten(), weights=edge_valid.flatten(), minLength=self.output_dim)
         assert len(projected) == self.output_dim
         return projected
-
+        
 
 class PredictiveProjection:
     class State:
@@ -322,7 +307,7 @@ class PredictiveProjection:
         self, output_dim,
         permanence_initial=0.01, permanence_threshold=0.5, permanence_increment=0.3, permanence_decrement=0.05, permanence_punishment=0.01,
         segment_activation_threshold=10, segment_matching_threshold=10, segment_sampling_synapses=20,
-        group_segment_exponential_growth=True
+        group_segment_growth_exponential=True
     ):
         assert segment_activation_threshold >= segment_matching_threshold
 
@@ -339,7 +324,7 @@ class PredictiveProjection:
         self.segment_sampling_synapses = segment_sampling_synapses
 
         self.segment_projection = SparseProjection(self.output_dim)
-        self.segment_group = DynamicArray2D(self.segment_group_dtype, size=(0, 1), exponential_growths=(group_segment_exponential_growth, False))
+        self.segment_group = DynamicArray2D(self.segment_group_dtype, size=(0, 1), growth_exponentials=(group_segment_growth_exponential, False))
         self.group_segments = np.zeros(self.output_dim, dtype=self.group_segment_dtype)
 
     def ensure_jittered_potential_info(self, state, matching_segment_group=None):
@@ -354,11 +339,11 @@ class PredictiveProjection:
         state.max_jittered_potential = max_jittered_potential
         state.matching_segment_jittered_potential = matching_segment_jittered_potential
 
-    def process(self, active_input, dense_input, return_jittered_potential_info=True):
+    def process(self, active_input, input_activation, return_jittered_potential_info=True):
         segment_potential = self.segment_projection.process(active_input=active_input)
         matching_segment, = np.where(segment_potential >= self.segment_matching_threshold)
         matching_segment_group = self.segment_group[matching_segment].squeeze(1)
-        matching_segment_activation = self.segment_projection.process(dense_input=dense_input, invoked_output=matching_segment, permanence_threshold=self.permanence_threshold)
+        matching_segment_activation = self.segment_projection.process(dense_input=input_activation, invoked_output=matching_segment, permanence_threshold=self.permanence_threshold)
         prediction = bincount(matching_segment_group, weights=matching_segment_activation >= self.segment_activation_threshold, minLength=self.output_dim)
         state = self.State(prediction, segment_potential, matching_segment, matching_segment_activation)
         if return_jittered_potential_info:

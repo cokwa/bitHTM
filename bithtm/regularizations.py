@@ -3,10 +3,10 @@ import numpy as np
 
 class ExponentialBoosting:
     def __init__(
-        self, output_dim, active_units,
+        self, output_dim, active_outputs,
         intensity=0.2, momentum=0.99
     ):
-        self.density = active_units / output_dim
+        self.density = active_outputs / output_dim
         self.intensity = intensity
         self.momentum = momentum
 
@@ -22,8 +22,8 @@ class ExponentialBoosting:
 
 
 class GlobalInhibition:
-    def __init__(self, active_units):
-        self.active_units = active_units
+    def __init__(self, active_outputs):
+        self.active_outputs = active_outputs
 
     def process(self, input):
-        return np.argpartition(input, -self.active_units)[-self.active_units:]
+        return np.argpartition(input, -self.active_outputs)[-self.active_outputs:]

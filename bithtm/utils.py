@@ -78,15 +78,15 @@ def replace_free(dests, srcs, free, dest_index=None, free_lengths=None, src_vali
 
 
 class DynamicArray2D:
-    def __init__(self, dtype, size=(0, 0), capacity=None, exponential_growths=(True, True), on_grow=None):
+    def __init__(self, dtype, size=(0, 0), capacity=None, growth_exponential=(True, True), on_grow=None):
         if capacity is None:
             capacity = (0, 0)
-        assert len(size) == len(capacity) == len(exponential_growths) == 2
+        assert len(size) == len(capacity) == len(growth_exponential) == 2
         capacity = tuple(np.maximum(capacity, size))
 
         self.dtype = dtype
         self.capacity = tuple(capacity)
-        self.exponential_growths = tuple(exponential_growths)
+        self.growth_exponential = tuple(growth_exponential)
         self.on_grow = on_grow
 
         self.size = tuple(size)
@@ -98,7 +98,7 @@ class DynamicArray2D:
         return np.empty(capacity, dtype=self.dtype)
 
     def evaluate_capacity(self, length, axis):
-        if not self.exponential_growths[axis]:
+        if not self.growth_exponential[axis]:
             return length
         return 2 ** int(np.ceil(np.log2(length)))
 
@@ -135,3 +135,8 @@ class DynamicArray2D:
 
     def add_cols(self, added_values):
         return self.add(added_values, 1)
+
+    def pop_rows(self, max_popped_rows):
+        popped_rows = min(max_popped_rows, self.size[0])
+        self.size = (self.size[0] - popped_rows, self.size[1])
+        return self.values[self.size[0]:self.size[0] + popped_rows, :self.size[1]]

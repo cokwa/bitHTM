@@ -118,7 +118,7 @@ class TemporalMemory:
                 winner_input=self.flatten_cell(prev_state.winner_cell), epsilon=epsilon
             )
 
-        distal_state = self.distal_projection.process(self.flatten_cell(active_cell), cell_activation.flatten(), return_jittered_potential_info=return_winner_cell)
+        distal_state = self.distal_projection.process(self.flatten_cell(active_cell), return_jittered_potential_info=return_winner_cell)
         cell_prediction = distal_state.prediction.reshape(self.column_dim, self.cell_dim) > epsilon
 
         curr_state = self.State(active_cell, cell_activation=cell_activation, cell_prediction=cell_prediction, active_column_bursting=active_column_bursting, distal_state=distal_state)

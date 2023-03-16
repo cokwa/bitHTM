@@ -41,7 +41,7 @@ def nonzero_bounded_2d(value, bounds, lengths=None, return_out_of_bounds=False):
         return nonzero_bounded, nonzero_oob
     return nonzero_bounded
 
-def replace_free(dests, srcs, free, dest_index=None, free_lengths=None, src_valid=None, src_lengths=None, return_indices=False, return_residue_info=False):
+def replace_free(free, dests, srcs, dest_index=None, free_lengths=None, src_valid=None, src_lengths=None, return_indices=False, return_residue_info=False):
     assert len(dests[0].shape) == len(free.shape) == len(srcs[0].shape) == 2
     if free_lengths is None:
         free_lengths = free.sum(axis=1)

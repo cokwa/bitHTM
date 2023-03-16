@@ -47,12 +47,13 @@ class TemporalMemory:
             self.distal_state = distal_state
 
     def __init__(
-        self, column_dim, cell_dim
+        self, column_dim, cell_dim,
+        distal_projection=None
     ):
         self.column_dim = column_dim
         self.cell_dim = cell_dim
 
-        self.distal_projection = PredictiveProjection(self.column_dim * self.cell_dim)
+        self.distal_projection = distal_projection or PredictiveProjection(self.column_dim * self.cell_dim)
 
         self.last_state = self.get_empty_state()
 
@@ -82,7 +83,7 @@ class TemporalMemory:
         return column_matching, cell_best_matching
 
     def evaluate_cell_least_used(self, predictive_projection, relevant_column, epsilon=1e-8):
-        cell_segments = predictive_projection.group_segments.reshape(self.column_dim, self.cell_dim)
+        cell_segments = predictive_projection.set_segments.reshape(self.column_dim, self.cell_dim)
         cell_segments_jittered = cell_segments[relevant_column].astype(np.float32)
         cell_segments_jittered += np.random.rand(*cell_segments_jittered.shape)
         cell_least_used = np.abs(cell_segments_jittered - cell_segments_jittered.min(axis=1, keepdims=True)) < epsilon
@@ -95,12 +96,6 @@ class TemporalMemory:
         active_column = sp_state.active_column
         active_column_cell_prediction = prev_state.cell_prediction[active_column]
         active_column_bursting = ~active_column_cell_prediction.max(axis=1, keepdims=True)
-        active_column_cell_activation = active_column_cell_prediction | active_column_bursting
-
-        active_cell = np.where(active_column_cell_activation)
-        active_cell = (active_column[active_cell[0]], active_cell[1])
-        cell_activation = np.zeros((self.column_dim, self.cell_dim), dtype=np.bool_)
-        cell_activation[active_cell] = True
 
         if learning or return_winner_cell:
             column_matching, cell_best_matching = self.evaluate_cell_best_matching(self.distal_projection, prev_state.distal_state, active_column, epsilon=epsilon)
@@ -117,6 +112,12 @@ class TemporalMemory:
                 prev_state.cell_activation.flatten(), self.flatten_cell(winner_cell), np.repeat(column_punishment, self.cell_dim),
                 winner_input=self.flatten_cell(prev_state.winner_cell), epsilon=epsilon
             )
+
+        active_column_cell_activation = active_column_cell_prediction | active_column_bursting
+        active_cell = np.where(active_column_cell_activation)
+        active_cell = (active_column[active_cell[0]], active_cell[1])
+        cell_activation = np.zeros((self.column_dim, self.cell_dim), dtype=np.bool_)
+        cell_activation[active_column] = active_column_cell_activation
 
         distal_state = self.distal_projection.process(self.flatten_cell(active_cell), return_jittered_potential_info=return_winner_cell)
         cell_prediction = distal_state.prediction.reshape(self.column_dim, self.cell_dim) > epsilon

@@ -52,14 +52,13 @@ def replace_free(free, dests, srcs, dest_index=None, free_lengths=None, src_vali
     if return_residue_info:
         residue_lengths = src_lengths - mutually_bounded_lengths
         residue_index = arange_concatenated(residue_lengths)
-    else:
-        residue_index = tuple([np.empty(0, dtype=np.int32)] * 2)
     if dest_index is not None:
         assert dest_index.shape[0] == free.shape[0]
         free_index = (dest_index[free_index[0]], free_index[1])
     if src_valid is None:
         src_index = arange_concatenated(mutually_bounded_lengths)
-        src_residue_index = (residue_index[0], residue_index[1] + mutually_bounded_lengths[residue_index[0]])
+        if return_residue_info:
+            src_residue_index = (residue_index[0], residue_index[1] + mutually_bounded_lengths[residue_index[0]])
     else:
         src_index = nonzero_bounded_2d(src_valid, mutually_bounded_lengths, lengths=src_lengths, return_out_of_bounds=return_residue_info)
         if return_residue_info:

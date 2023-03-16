@@ -4,7 +4,7 @@ import numpy as np
 class ExponentialBoosting:
     def __init__(
         self, output_dim, active_outputs,
-        intensity=0.2, momentum=0.99
+        intensity=0.1, momentum=0.99
     ):
         self.density = active_outputs / output_dim
         self.intensity = intensity

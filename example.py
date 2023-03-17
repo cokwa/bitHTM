@@ -8,12 +8,7 @@ if __name__ == '__main__':
     htm = HierarchicalTemporalMemory(inputs.shape[1], 2048, 32)
 
     import time
-
     start_time = time.time()
-
-    hist_burstings = []
-    hist_corrects = []
-    hist_incorrects = []
 
     for epoch in range(100):
         for i, curr_input in enumerate(inputs):

@@ -1,4 +1,3 @@
-
 from .projections import DenseProjection, PredictiveProjection
 from .regularizations import ExponentialBoosting, GlobalInhibition
 

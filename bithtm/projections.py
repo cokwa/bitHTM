@@ -7,7 +7,7 @@ class DenseProjection:
     def __init__(
         self, input_dim, output_dim,
         permanence_mean=0.0, permanence_std=0.1,
-        permanence_threshold=0.0, permanence_increment=0.1, permanence_decrement=0.3
+        permanence_threshold=0.0, permanence_increment=0.1, permanence_decrement=0.2
     ):
         self.permanence_threshold = permanence_threshold
         self.permanence_increment = permanence_increment

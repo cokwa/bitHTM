@@ -1,2 +1,2 @@
 # bitHTM
-A barely barebone implementation of Hierarchical Temporal Memory on NumPy.
+A barely barebone NumPy implementation of Hierarchical Temporal Memory.

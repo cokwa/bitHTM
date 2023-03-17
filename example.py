@@ -4,7 +4,7 @@ import numpy as np
 
 
 if __name__ == '__main__':
-    inputs = np.random.rand(10, 1000) < 0.2
+    inputs = np.random.rand(100, 1000) < 0.2
     htm = HierarchicalTemporalMemory(inputs.shape[1], 2048, 32)
 
     import time
@@ -20,6 +20,6 @@ if __name__ == '__main__':
             burstings = tm_state.active_column_bursting.sum()
             corrects = prev_column_prediction[sp_state.active_column].sum()
             incorrects = prev_column_prediction.sum() - corrects
-            # print(f'epoch {epoch}, pattern {input_index}: bursting columns: {burstings}, correct columns: {corrects}, incorrect columns: {incorrects}')
+            print(f'epoch {epoch:2d}, pattern {input_index:2d}: bursting columns: {burstings:2d}, correct columns: {corrects:2d}, incorrect columns: {incorrects:2d}')
 
     print(f'{time.time() - start_time} seconds.')

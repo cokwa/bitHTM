@@ -58,13 +58,13 @@ class SparseProjection:
         new_values[tuple(index)] = -1.0
 
     def get_output_edge_target(self, output_edge):
-        return output_edge % self.input_dim
+        return output_edge % (self.input_dim + 1)
 
     def pack_output_edge(self, target_input, input_edge):
-        return input_edge * self.input_dim + target_input
+        return input_edge * (self.input_dim + 1) + target_input
 
     def unpack_output_edge(self, output_edge):
-        input_edge, target_input = np.divmod(output_edge, self.input_dim)
+        input_edge, target_input = np.divmod(output_edge, self.input_dim + 1)
         return target_input, input_edge
 
     def pad_input_activation(self, active_input=None, input_activation=None):
@@ -136,7 +136,7 @@ class SparseProjection:
         if max_new_input_edges > 0:
             prev_max_input_edges = self.input_edge.size[1]
             new_input_edge = (winner_input[residue_index[0]], residue_index[1])
-            new_input_edge_target = np.full((1 + self.input_dim, max_new_input_edges), self.invalid_input_edge, dtype=self.input_edge.dtype)
+            new_input_edge_target = np.full((self.input_dim + 1, max_new_input_edges), self.invalid_input_edge, dtype=self.input_edge.dtype)
             new_input_edge_target[new_input_edge] = learning_output[src_residue_index[1]] + 1
             self.input_edge.add_cols(new_input_edge_target)
             new_input_edge = (new_input_edge[0], prev_max_input_edges + new_input_edge[1])
@@ -160,16 +160,6 @@ class SparseProjection:
             self.output_edge.add_cols(new_output_edge_target)
             self.output_permanence.add_cols(new_output_edge_permanence)
         self.output_edges[learning_output] += np.expand_dims(added_output_edges, 1)
-
-        input_to_output = self.process(*np.where(padded_input_activation[:-1]))[learning_output]
-        # output_from_input = self.process(*np.where(padded_input_activation[:-1]), invoked_output=learning_output)
-        output_from_input = self.process(padded_input_activation=padded_input_activation, invoked_output=learning_output)
-        if (input_to_output < min_active_edges).any() or (input_to_output != output_from_input).any():
-            print()
-            print(added_output_edges)
-            print(input_to_output)
-            print(output_from_input)
-            # quit()
 
     def process(self, active_input=None, padded_input_activation=None, invoked_output=None, permanence_threshold=None):
         if invoked_output is None and permanence_threshold is not None:

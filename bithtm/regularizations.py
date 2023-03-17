@@ -13,7 +13,7 @@ class ExponentialBoosting:
         self.duty_cycle = np.zeros(output_dim, dtype=np.float32)
 
     def process(self, input):
-        factor = np.exp(self.intensity * -self.duty_cycle / self.density)
+        factor = np.exp(-(self.intensity / self.density) * self.duty_cycle)
         return factor * input
 
     def update(self, active):

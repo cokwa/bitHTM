@@ -269,7 +269,7 @@ class HierarchicalTemporalMemory:
         self.temporal_memory.run(self.spatial_pooler.active)
 
 if __name__ == '__main__':
-    input = np.random.rand(10, 1000) < 0.2
+    input = np.random.rand(100, 1000) < 0.2
     htm = HierarchicalTemporalMemory(1000, 2048, 32)
 
     import time

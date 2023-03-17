@@ -161,6 +161,16 @@ class SparseProjection:
             self.output_permanence.add_cols(new_output_edge_permanence)
         self.output_edges[learning_output] += np.expand_dims(added_output_edges, 1)
 
+        input_to_output = self.process(*np.where(padded_input_activation[:-1]))[learning_output]
+        # output_from_input = self.process(*np.where(padded_input_activation[:-1]), invoked_output=learning_output)
+        output_from_input = self.process(padded_input_activation=padded_input_activation, invoked_output=learning_output)
+        if (input_to_output < min_active_edges).any() or (input_to_output != output_from_input).any():
+            print()
+            print(added_output_edges)
+            print(input_to_output)
+            print(output_from_input)
+            # quit()
+
     def process(self, active_input=None, padded_input_activation=None, invoked_output=None, permanence_threshold=None):
         if invoked_output is None and permanence_threshold is not None:
             raise NotImplementedError()

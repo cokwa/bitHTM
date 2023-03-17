@@ -282,9 +282,6 @@ if __name__ == '__main__':
 
             htm.run(input[i] ^ (np.random.rand(*input[i].shape) < 0.05))
 
-            hist, bins = np.histogram(np.log(htm.spatial_pooler.duty_cycle + 1), bins=[0, 0.015, 0.025, 0.035, 0.045, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0])
-            print(*[f'{bin[0]} ({freq})' for bin, freq in zip(zip(bins[:-1], bins[1:]), hist) if freq > 0], bins[np.nonzero(hist)[0][-1] + 1])
-            
             corrects = prev_column_predictive[htm.spatial_pooler.active].sum()
             incorrects = prev_column_predictive.sum() - corrects
             print('epoch {}, pattern {}: correct columns: {}, incorrect columns: {}'.format(epoch, i, corrects, incorrects))

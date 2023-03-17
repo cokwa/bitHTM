@@ -11,7 +11,7 @@ if __name__ == '__main__':
     start_time = time.time()
 
     for epoch in range(100):
-        for i, curr_input in enumerate(inputs):
+        for input_index, curr_input in enumerate(inputs):
             prev_column_prediction = htm.temporal_memory.last_state.cell_prediction.max(axis=1)
 
             noisy_input = curr_input ^ (np.random.rand(*curr_input.shape) < 0.05)
@@ -20,6 +20,6 @@ if __name__ == '__main__':
             burstings = tm_state.active_column_bursting.sum()
             corrects = prev_column_prediction[sp_state.active_column].sum()
             incorrects = prev_column_prediction.sum() - corrects
-            print(f'epoch {epoch}, pattern {i}: burstings columns: {burstings}, correct columns: {corrects}, incorrect columns: {incorrects}')
+            print(f'epoch {epoch}, pattern {input_index}: bursting columns: {burstings}, correct columns: {corrects}, incorrect columns: {incorrects}')
 
     print(f'{time.time() - start_time} seconds.')

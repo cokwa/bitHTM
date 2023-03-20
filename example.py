@@ -1,10 +1,25 @@
 from bithtm import HierarchicalTemporalMemory
+from bithtm.reference_implementations import TemporalMemory as ReferenceTemporalMemory
 
 import numpy as np
 
 
+import copy
+class ReferenceHierarchicalTemporalMemory(HierarchicalTemporalMemory):
+    def __init__(self, input_dim, column_dim, cell_dim, active_columns=None):
+        super().__init__(
+            input_dim, column_dim, cell_dim, active_columns=active_columns,
+            temporal_memory=ReferenceTemporalMemory(column_dim, cell_dim)
+        )
+
+    def copy_custom(self, custom_htm):
+        assert self.column_dim == custom_htm.column_dim and self.cell_dim == custom_htm.cell_dim
+        self.spatial_pooler = copy.deepcopy(custom_htm.spatial_pooler)
+        self.temporal_memory.copy_custom(custom_htm.temporal_memory)
+
+
 if __name__ == '__main__':
-    epochs = 1000
+    epochs = 100
     input_patterns = 10
     input_dim = 1000
     input_density = 0.2
@@ -13,8 +28,11 @@ if __name__ == '__main__':
     column_dim = 2048
     cell_dim = 32
 
+    np.random.seed(3407)
     inputs = np.random.rand(input_patterns, input_dim) < input_density
     htm = HierarchicalTemporalMemory(input_dim, column_dim, cell_dim)
+    # np.random.seed(3407)
+    # ref_htm = ReferenceHierarchicalTemporalMemory(input_dim, column_dim, cell_dim)
 
     import time
     start_time = time.time()
@@ -26,6 +44,8 @@ if __name__ == '__main__':
 
     for epoch in range(epochs):
         for input_index, curr_input in enumerate(inputs):
+            # ref_htm.copy_custom(htm)
+
             prev_column_prediction = htm.temporal_memory.last_state.cell_prediction.max(axis=1)
 
             noisy_input = curr_input ^ (np.random.rand(input_dim) < input_noise_probability)
@@ -36,11 +56,25 @@ if __name__ == '__main__':
             incorrects = prev_column_prediction.sum() - corrects
 
             print(
-                f'epoch {epoch:{epoch_string_length}d},',
-                f'pattern {input_index:{pattern_string_length}d}:',
-                f'bursting columns: {burstings:{active_column_string_length}d},',
-                f'correct columns: {corrects:{active_column_string_length}d},',
+                f'epoch {epoch:{epoch_string_length}d}, '
+                f'pattern {input_index:{pattern_string_length}d}: '
+                f'bursting columns: {burstings:{active_column_string_length}d}, '
+                f'correct columns: {corrects:{active_column_string_length}d}, '
                 f'incorrect columns: {incorrects:{column_string_length}d}'
             )
+
+            # ref_sp_state, ref_tm_state = ref_htm.process(noisy_input)
+
+            # ref_burstings = ref_tm_state.active_column_bursting.sum()
+            # ref_corrects = prev_column_prediction[ref_sp_state.active_column].sum()
+            # ref_incorrects = prev_column_prediction.sum() - corrects
+
+            # print(
+            #     f'r: epoch {epoch:{epoch_string_length}d}, '
+            #     f'pattern {input_index:{pattern_string_length}d}: '
+            #     f'bursting columns: {ref_burstings:{active_column_string_length}d}, '
+            #     f'correct columns: {ref_corrects:{active_column_string_length}d}, '
+            #     f'incorrect columns: {ref_incorrects:{column_string_length}d}'
+            # )
 
     print(f'{time.time() - start_time} seconds.')

@@ -82,7 +82,7 @@ class TemporalMemory:
         return column_matching, cell_best_matching
 
     def evaluate_cell_least_used(self, predictive_projection, relevant_column, epsilon=1e-8):
-        cell_segments = predictive_projection.set_segments.reshape(self.column_dim, self.cell_dim)
+        cell_segments = predictive_projection.bundle_segments.reshape(self.column_dim, self.cell_dim)
         cell_segments_jittered = cell_segments[relevant_column].astype(np.float32)
         cell_segments_jittered += np.random.rand(*cell_segments_jittered.shape)
         cell_least_used = np.abs(cell_segments_jittered - cell_segments_jittered.min(axis=1, keepdims=True)) < epsilon
@@ -136,10 +136,14 @@ class HierarchicalTemporalMemory:
         if active_columns is None:
             active_columns = round(column_dim * 0.02)
 
+        self.column_dim = column_dim
+        self.cell_dim = cell_dim
+        self.active_columns = active_columns
+
         self.spatial_pooler = spatial_pooler or SpatialPooler(input_dim, column_dim, active_columns)
-        # self.temporal_memory = temporal_memory or TemporalMemory(column_dim, cell_dim)
-        from .reference_implementations import TemporalMemory as ReferenceTemporalMemory
-        self.temporal_memory = temporal_memory or ReferenceTemporalMemory(column_dim, cell_dim)
+        self.temporal_memory = temporal_memory or TemporalMemory(column_dim, cell_dim)
+        # from .reference_implementations import TemporalMemory as ReferenceTemporalMemory
+        # self.temporal_memory = temporal_memory or ReferenceTemporalMemory(column_dim, cell_dim)
 
     def process(self, input, learning=True):
         sp_state = self.spatial_pooler.process(input, learning=learning)

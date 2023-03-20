@@ -45,7 +45,49 @@ class TemporalMemory:
     def get_empty_state(self):
         return self.State(self.column_dim, self.cell_dim)
 
-    def active_predicted_column(self, column, prev_state, curr_state, learning):
+    def copy_custom(self, custom_tm):
+        assert self.column_dim == custom_tm.column_dim and self.cell_dim == custom_tm.cell_dim
+        
+        self.segment_cell = custom_tm.distal_projection.segment_bundle[:].squeeze(1).tolist()
+        self.cell_segments = [[] for _ in range(self.column_dim * self.cell_dim)]
+        for segment, cell in enumerate(self.segment_cell):
+            self.cell_segments[cell].append(segment)
+
+        custom_segment_projection = custom_tm.distal_projection.segment_projection
+        self.segment_synapses = []
+        self.synapse_presynaptic_cell = {}
+        self.synapse_permanence = {}
+        self.next_synapse = 0
+        for synapses, permanences in zip(custom_segment_projection.output_edge[:], custom_segment_projection.output_permanence[:]):
+            self.segment_synapses.append([])
+            for synapse, permanence in zip(synapses, permanences):
+                if synapse == custom_segment_projection.invalid_output_edge:
+                    continue
+                presynaptic_cell = custom_segment_projection.get_output_edge_target(synapse)
+                self.segment_synapses[-1].append(self.next_synapse)
+                self.synapse_presynaptic_cell[self.next_synapse] = presynaptic_cell
+                self.synapse_permanence[self.next_synapse] = permanence
+                self.next_synapse += 1
+
+        empty_state = self.get_empty_state()
+        self.last_state.winner_cells = empty_state.winner_cells
+        self.last_state.active_segments = empty_state.active_segments
+        self.last_state.matching_segments = empty_state.matching_segments
+        self.last_state.segment_num_active_potential_synapses = empty_state.segment_num_active_potential_synapses
+        
+        self.last_state.active_cells = custom_tm.flatten_cell(custom_tm.last_state.active_cell).tolist()
+        if custom_tm.last_state.winner_cell is not None:
+            self.last_state.winner_cells = custom_tm.flatten_cell(custom_tm.last_state.winner_cell).tolist()
+
+        custom_distal_state = custom_tm.last_state.distal_state
+        if custom_distal_state is not None:
+            matching_segment = custom_distal_state.matching_segment
+            self.last_state.active_segments = set(matching_segment[custom_distal_state.matching_segment_active].tolist())
+            self.last_state.matching_segments = set(matching_segment.tolist())
+            for segment, num_active_potential_synapses in zip(matching_segment, custom_distal_state.segment_potential[matching_segment]):
+                self.last_state.segment_num_active_potential_synapses[segment] = num_active_potential_synapses
+
+    def activate_predicted_column(self, column, prev_state, curr_state, learning):
         for segment in self.segments_for_column(column, prev_state.active_segments):
             curr_state.active_cells.add(self.segment_cell[segment])
             curr_state.winner_cells.add(self.segment_cell[segment])
@@ -188,7 +230,7 @@ class TemporalMemory:
         for column in self.columns:
             if column in sp_state.active_column:
                 if len(self.segments_for_column(column, prev_state.active_segments)) > 0:
-                    self.active_predicted_column(column, prev_state, curr_state, learning)
+                    self.activate_predicted_column(column, prev_state, curr_state, learning)
                 else:
                     self.burst_column(column, prev_state, curr_state, learning)
             else:

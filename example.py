@@ -8,7 +8,7 @@ if __name__ == '__main__':
     input_patterns = 100
     input_dim = 1000
     input_density = 0.2
-    input_noise_percentage = 0.05
+    input_noise_probability = 0.05
 
     column_dim = 2048
     cell_dim = 32
@@ -23,7 +23,7 @@ if __name__ == '__main__':
         for input_index, curr_input in enumerate(inputs):
             prev_column_prediction = htm.temporal_memory.last_state.cell_prediction.max(axis=1)
 
-            noisy_input = curr_input ^ (np.random.rand(input_dim) < input_noise_percentage)
+            noisy_input = curr_input ^ (np.random.rand(input_dim) < input_noise_probability)
             sp_state, tm_state = htm.process(noisy_input)
 
             burstings = tm_state.active_column_bursting.sum()

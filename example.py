@@ -1,20 +1,28 @@
 from bithtm import HierarchicalTemporalMemory
-
 import numpy as np
 
 
 if __name__ == '__main__':
-    inputs = np.random.rand(100, 1000) < 0.2
-    htm = HierarchicalTemporalMemory(inputs.shape[1], 2048, 32)
+    epochs = 100
+    input_patterns = 100
+    input_dim = 1000
+    input_density = 0.2
+    input_noise_percentage = 0.05
+
+    column_dim = 2048
+    cell_dim = 32
+
+    inputs = np.random.rand(input_patterns, input_dim) < input_density
+    htm = HierarchicalTemporalMemory(input_dim, column_dim, cell_dim)
 
     import time
     start_time = time.time()
 
-    for epoch in range(100):
+    for epoch in range(epochs):
         for input_index, curr_input in enumerate(inputs):
             prev_column_prediction = htm.temporal_memory.last_state.cell_prediction.max(axis=1)
 
-            noisy_input = curr_input ^ (np.random.rand(*curr_input.shape) < 0.05)
+            noisy_input = curr_input ^ (np.random.rand(input_dim) < input_noise_percentage)
             sp_state, tm_state = htm.process(noisy_input)
 
             burstings = tm_state.active_column_bursting.sum()

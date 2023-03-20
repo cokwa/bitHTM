@@ -137,7 +137,9 @@ class HierarchicalTemporalMemory:
             active_columns = round(column_dim * 0.02)
 
         self.spatial_pooler = spatial_pooler or SpatialPooler(input_dim, column_dim, active_columns)
-        self.temporal_memory = temporal_memory or TemporalMemory(column_dim, cell_dim)
+        # self.temporal_memory = temporal_memory or TemporalMemory(column_dim, cell_dim)
+        from .reference_implementations import TemporalMemory as ReferenceTemporalMemory
+        self.temporal_memory = temporal_memory or ReferenceTemporalMemory(column_dim, cell_dim)
 
     def process(self, input, learning=True):
         sp_state = self.spatial_pooler.process(input, learning=learning)

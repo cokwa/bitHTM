@@ -36,8 +36,9 @@ class TemporalMemory:
         self.cell_segments = [[] for _ in range(self.column_dim * self.cell_dim)]
         self.segment_cell = []
         self.segment_synapses = []
-        self.synapse_presynaptic_cell = []
-        self.synapse_permanence = []
+        self.synapse_presynaptic_cell = {}
+        self.synapse_permanence = {}
+        self.next_synapse = 0
 
         self.last_state = self.get_empty_state()
 
@@ -78,7 +79,7 @@ class TemporalMemory:
                 if self.synapse_presynaptic_cell[synapse]:
                     self.synapse_permanence[synapse] += self.permanence_increment
                 else:
-                    self.synapse_permanence[synapse] += self.permanence_decrement
+                    self.synapse_permanence[synapse] -= self.permanence_decrement
 
             new_synapse_count = self.segment_sampling_synapses - self.num_active_potential_synapses(prev_state, learning_segment)
             self.grow_synapses(learning_segment, new_synapse_count, prev_state)
@@ -114,9 +115,23 @@ class TemporalMemory:
                 new_synapse_count -= 1
 
     def create_new_synapse(self, segment, presynaptic_cell, permanence):
-        self.segment_synapses[segment].append(len(self.synapse_presynaptic_cell))
-        self.synapse_presynaptic_cell.append(presynaptic_cell)
-        self.synapse_permanence.append(permanence)
+        new_synapse = self.next_synapse
+        self.next_synapse += 1
+        self.segment_synapses[segment].append(new_synapse)
+        self.synapse_presynaptic_cell[new_synapse] = presynaptic_cell
+        self.synapse_permanence[new_synapse] = permanence
+        return new_synapse
+
+    def cleanup_synapses(self, segment):
+        synapses = self.segment_synapses[segment]
+        synapse = 0
+        while synapse < len(synapses):
+            if self.synapse_permanence[synapses[synapse]] >= 0:
+                synapse += 1
+                continue
+            del self.synapse_presynaptic_cell[synapses[synapse]]
+            del self.synapse_permanence[synapses[synapse]]
+            del synapses[synapse]
 
     def least_used_cell(self, column):
         fewest_segments = np.inf
@@ -179,6 +194,9 @@ class TemporalMemory:
             else:
                 if len(self.segments_for_column(column, prev_state.matching_segments)) > 0:
                     self.punish_predicted_column(column, prev_state, learning)
+
+        for segment in prev_state.matching_segments:
+            self.cleanup_synapses(segment)
 
         for segment, synapses in enumerate(self.segment_synapses):
             num_active_connected = 0

@@ -100,6 +100,7 @@ class SparseProjection:
         learning_target_input, learning_input_edge = self.unpack_output_edge(learning_output_edge)
         edge_activation = padded_input_activation[learning_target_input]
         naive_permanence_change = edge_activation * (active_edge_permanence_change - inactive_edge_permanence_change) + inactive_edge_permanence_change
+        print(f'active edges: {(learning_output_edge_valid & edge_activation).sum()}, inactive edges: {(learning_output_edge_valid & (~edge_activation)).sum()}')
         updated_permanence = self.output_permanence[learning_output] + learning_output_edge_valid * naive_permanence_change
         updated_permanence_invalid = updated_permanence <= 0.0
         self.output_edges[learning_output] -= (learning_output_edge_valid & updated_permanence_invalid).sum(axis=1, keepdims=True)
@@ -181,8 +182,8 @@ class SparseProjection:
     def update(
         self, learning_output,
         input_activation=None, padded_input_activation=None,
-        winner_input=None, min_active_edges=20,
-        permanence_initial=0.01, active_edge_permanence_change=0.3, inactive_edge_permanence_change=0.05
+        winner_input=None, min_active_edges=32,
+        permanence_initial=0.21, active_edge_permanence_change=0.1, inactive_edge_permanence_change=0.1
     ):
         assert input_activation is not None or padded_input_activation is not None
         if padded_input_activation is None:
@@ -284,7 +285,7 @@ class PredictiveProjection:
         self.segment_projection.update(
             learning_segment, padded_input_activation=padded_input_activation, winner_input=winner_input,
             permanence_initial=self.permanence_initial,
-            active_edge_permanence_change=self.permanence_increment, inactive_edge_permanence_change=(-self.permanence_decrement),
+            active_edge_permanence_change=self.permanence_increment, inactive_edge_permanence_change=0.0, # (-self.permanence_decrement),
             min_active_edges=self.segment_sampling_synapses
         )
         self.segment_projection.update(

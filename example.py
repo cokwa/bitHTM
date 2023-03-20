@@ -1,4 +1,5 @@
 from bithtm import HierarchicalTemporalMemory
+
 import numpy as np
 
 

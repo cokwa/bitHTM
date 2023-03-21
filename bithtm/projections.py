@@ -101,34 +101,14 @@ class SparseProjection:
         edge_activation = padded_input_activation[learning_target_input]
         naive_permanence_change = edge_activation * (active_edge_permanence_change - inactive_edge_permanence_change) + inactive_edge_permanence_change
         updated_permanence = self.output_permanence[learning_output] + learning_output_edge_valid * naive_permanence_change
-        updated_permanence_invalid = updated_permanence <= 0.0
-        self.output_edges[learning_output] -= (learning_output_edge_valid & updated_permanence_invalid).sum(axis=1, keepdims=True)
-        self.output_edge[learning_output] = np.where(updated_permanence_invalid, self.invalid_output_edge, learning_output_edge)
-        self.input_edge[learning_target_input, learning_input_edge] = np.where(updated_permanence_invalid, self.invalid_input_edge, np.expand_dims(1 + learning_output, 1))
         self.output_permanence[learning_output] = updated_permanence
-
-        # np.subtract.at(self.output_edges[:], learning_output, (learning_output_edge_valid & updated_permanence_invalid).sum(axis=1, keepdims=True))
-        # updated_permanence_invalid = np.where(updated_permanence_invalid)
-        # np.maximum.at(self.output_edge[:], (learning_output[updated_permanence_invalid[0]], updated_permanence_invalid[1]), self.invalid_output_edge)
-        # np.minimum.at(self.input_edge[:], (learning_target_input[updated_permanence_invalid], learning_input_edge[updated_permanence_invalid]), self.invalid_input_edge)
-
-        # for output in learning_output:
-        #     for edge_index, edge in enumerate(self.output_edge[output]):
-        #         if edge == self.invalid_output_edge:
-        #             continue
-        #         target_input, input_edge = self.unpack_output_edge(edge)
-        #         if padded_input_activation[target_input]:
-        #             self.output_permanence[output, edge_index] += active_edge_permanence_change
-        #         else:
-        #             self.output_permanence[output, edge_index] += inactive_edge_permanence_change
-        #         if self.output_permanence[output, edge_index] <= 0.0:
-        #             self.output_edges[output] -= 1
-        #             self.output_edge[output, edge_index] = self.invalid_output_edge
-        #             self.input_edge[target_input, input_edge] = self.invalid_input_edge
+        if min(active_edge_permanence_change, inactive_edge_permanence_change) < 0:
+            updated_permanence_invalid = updated_permanence < 0.0
+            self.output_edges[learning_output] -= (learning_output_edge_valid & updated_permanence_invalid).sum(axis=1, keepdims=True)
+            self.output_edge[learning_output] = np.where(updated_permanence_invalid, self.invalid_output_edge, learning_output_edge)
+            self.input_edge[learning_target_input, learning_input_edge] = np.where(updated_permanence_invalid, self.invalid_input_edge, np.expand_dims(1 + learning_output, 1))        
 
     def add_edge(self, padded_input_activation, winner_input, learning_output, permanence_initial, min_active_edges):
-        assert permanence_initial > 0.0
-
         learning_edge = self.output_edge[learning_output]
         learning_edge_target = self.get_output_edge_target(learning_edge)
         output_active_edges = padded_input_activation[learning_edge_target].sum(axis=1)

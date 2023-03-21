@@ -27,12 +27,17 @@ if __name__ == '__main__':
 
     column_dim = 2048
     cell_dim = 32
+    use_reference_implementation = True
 
     np.random.seed(3407)
     inputs = np.random.rand(input_patterns, input_dim) < input_density
+    noisy_inputs = (np.random.rand(epochs, input_patterns, input_dim) < input_noise_probability) ^ inputs
     htm = HierarchicalTemporalMemory(input_dim, column_dim, cell_dim)
-    # np.random.seed(3407)
-    # ref_htm = ReferenceHierarchicalTemporalMemory(input_dim, column_dim, cell_dim)
+
+    if use_reference_implementation:
+        ref_htm = ReferenceHierarchicalTemporalMemory(input_dim, column_dim, cell_dim)
+        ref_htm.copy_custom(htm)
+        htm = ref_htm
 
     import time
     start_time = time.time()
@@ -43,12 +48,11 @@ if __name__ == '__main__':
     active_column_string_length = int(np.ceil(np.log10(htm.spatial_pooler.active_columns - 1)))
 
     for epoch in range(epochs):
-        for input_index, curr_input in enumerate(inputs):
-            # ref_htm.copy_custom(htm)
-
+        # for input_index, curr_input in enumerate(inputs):
+        for input_index, noisy_input in enumerate(noisy_inputs[epoch]):
             prev_column_prediction = htm.temporal_memory.last_state.cell_prediction.max(axis=1)
 
-            noisy_input = curr_input ^ (np.random.rand(input_dim) < input_noise_probability)
+            # noisy_input = curr_input ^ (np.random.rand(input_dim) < input_noise_probability)
             sp_state, tm_state = htm.process(noisy_input)
 
             burstings = tm_state.active_column_bursting.sum()
@@ -62,19 +66,5 @@ if __name__ == '__main__':
                 f'correct columns: {corrects:{active_column_string_length}d}, '
                 f'incorrect columns: {incorrects:{column_string_length}d}'
             )
-
-            # ref_sp_state, ref_tm_state = ref_htm.process(noisy_input)
-
-            # ref_burstings = ref_tm_state.active_column_bursting.sum()
-            # ref_corrects = prev_column_prediction[ref_sp_state.active_column].sum()
-            # ref_incorrects = prev_column_prediction.sum() - corrects
-
-            # print(
-            #     f'r: epoch {epoch:{epoch_string_length}d}, '
-            #     f'pattern {input_index:{pattern_string_length}d}: '
-            #     f'bursting columns: {ref_burstings:{active_column_string_length}d}, '
-            #     f'correct columns: {ref_corrects:{active_column_string_length}d}, '
-            #     f'incorrect columns: {ref_incorrects:{column_string_length}d}'
-            # )
 
     print(f'{time.time() - start_time} seconds.')

@@ -112,20 +112,19 @@ class DynamicArray2D:
 
     def add(self, added_values, axis):
         assert len(added_values.shape) == 2 and added_values.shape[1 - axis] == self.size[1 - axis]
-        new_length = self.size[axis] + added_values.shape[axis]
         new_size = list(self.size)
-        new_size[axis] = new_length
-        if new_length > self.capacity[axis]:
+        new_size[axis] += added_values.shape[axis]
+        if new_size[axis] > self.capacity[axis]:
             new_capacity = list(self.capacity)
-            new_capacity[axis] = self.evaluate_capacity(new_length, axis)
+            new_capacity[axis] = self.evaluate_capacity(new_size[axis], axis)
             new_values = self.initialize_values(capacity=new_capacity)
             new_values[:self.capacity[0], :self.capacity[1]] = self.values
             if self.on_grow is not None:
                 self.on_grow(new_values, tuple(new_size), tuple(new_capacity), axis)
-            self.capacity = new_capacity
+            self.capacity = tuple(new_capacity)
             self.values = new_values
         index = [slice(None, self.size[1 - axis])]
-        index.insert(axis, slice(self.size[axis], new_length))
+        index.insert(axis, slice(self.size[axis], new_size[axis]))
         self.values[tuple(index)] = added_values
         self.size = tuple(new_size)
 

@@ -133,8 +133,3 @@ class DynamicArray2D:
 
     def add_cols(self, added_values):
         return self.add(added_values, 1)
-
-    def pop_rows(self, max_popped_rows):
-        popped_rows = min(max_popped_rows, self.size[0])
-        self.size = (self.size[0] - popped_rows, self.size[1])
-        return self.values[self.size[0]:self.size[0] + popped_rows, :self.size[1]]

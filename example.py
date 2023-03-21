@@ -27,11 +27,11 @@ if __name__ == '__main__':
 
     column_dim = 2048
     cell_dim = 32
-    use_reference_implementation = True
+    use_reference_implementation = False
 
     np.random.seed(3407)
     inputs = np.random.rand(input_patterns, input_dim) < input_density
-    noisy_inputs = (np.random.rand(epochs, input_patterns, input_dim) < input_noise_probability) ^ inputs
+    noisy_inputs = inputs ^ (np.random.rand(epochs, input_patterns, input_dim) < input_noise_probability)
     htm = HierarchicalTemporalMemory(input_dim, column_dim, cell_dim)
 
     if use_reference_implementation:

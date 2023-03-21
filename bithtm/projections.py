@@ -161,7 +161,7 @@ class SparseProjection:
         self.output_edges[learning_output] += np.expand_dims(added_output_edges, 1)
 
     def process(self, active_input=None, padded_input_activation=None, invoked_output=None, permanence_threshold=None):
-        if invoked_output is None and permanence_threshold is not None:
+        if invoked_output is None and (padded_input_activation is not None or permanence_threshold is not None):
             raise NotImplementedError()
 
         if invoked_output is not None:
@@ -268,13 +268,13 @@ class PredictiveProjection:
         if len(unaccounted_output) > 0:
             unaccounted_output = learning_output[unaccounted_output]
             replaced_segment, new_segment = self.segment_projection.add_output(len(unaccounted_output), self.segment_matching_threshold)
-            learning_segment = np.concatenate([learning_segment, replaced_segment, new_segment])
             replaced_segment_bundle, bundle_replaced_segments = np.unique(self.segment_bundle[replaced_segment], return_counts=True)
             self.bundle_segments[replaced_segment_bundle] -= bundle_replaced_segments
             self.bundle_segments[unaccounted_output] += 1
             self.segment_bundle[replaced_segment] = np.expand_dims(unaccounted_output[:len(replaced_segment)], 1)
             if len(new_segment) > 0:
                 self.segment_bundle.add_rows(np.expand_dims(unaccounted_output[-len(new_segment):], 1))
+            learning_segment = np.concatenate([learning_segment, replaced_segment, new_segment])
 
         padded_input_activation = self.segment_projection.pad_input_activation(input_activation)
         self.segment_projection.update(

@@ -141,9 +141,9 @@ class TemporalMemory:
         return new_segment
 
     def grow_synapses(self, segment, new_synapse_count, prev_state):
-        candidates = prev_state.winner_cells.copy()
+        candidates = list(prev_state.winner_cells)
         while len(candidates) > 0 and new_synapse_count > 0:
-            presynaptic_cell = np.random.choice(list(candidates))
+            presynaptic_cell = np.random.choice(candidates)
             candidates.remove(presynaptic_cell)
 
             already_connected = False

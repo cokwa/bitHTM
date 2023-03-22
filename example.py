@@ -13,7 +13,7 @@ if __name__ == '__main__':
 
     column_dim = 2048
     cell_dim = 32
-    use_reference_implementation = False
+    use_reference_implementation = True
 
     np.random.seed(3407)
     inputs = np.random.rand(input_patterns, input_dim) < input_density
@@ -50,7 +50,7 @@ if __name__ == '__main__':
                 f'correct columns: {corrects:{active_column_string_length}d}, '
                 f'incorrect columns: {incorrects:{column_string_length}d}'
             )
-            print(f'active cells: {(tm_state.active_cell[0] * cell_dim + tm_state.active_cell[1]).tolist()}')
+            # print(f'active cells: {(tm_state.active_cell[0] * cell_dim + tm_state.active_cell[1]).tolist()}')
             print(f'winner cells: {(tm_state.winner_cell[0] * cell_dim + tm_state.winner_cell[1]).tolist()}')
 
     print(f'{time.time() - start_time} seconds.')

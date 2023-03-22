@@ -112,11 +112,11 @@ class TemporalMemory:
         else:
             winner_cell = self.least_used_cell(column)
             if learning:
-                learning_segment = self.grow_new_segment(winner_cell)
+                learning_segment = self.grow_new_segment(winner_cell) if len(prev_state.winner_cells) > 0 else None
 
         curr_state.winner_cells.append(winner_cell)
 
-        if learning:
+        if learning and learning_segment is not None:
             for synapse in self.segment_synapses[learning_segment]:
                 if self.synapse_presynaptic_cell[synapse]:
                     self.synapse_permanence[synapse] += self.permanence_increment
@@ -210,9 +210,6 @@ class TemporalMemory:
         return state.segment_num_active_potential_synapses[segment]
 
     def process(self, sp_state, prev_state=None, learning=True):
-        # print(f'synapse tgt: {list(self.synapse_presynaptic_cell.values())}')
-        # print(f'synapse prm: {list(self.synapse_permanence.values())}')
-
         if prev_state is None:
             prev_state = self.last_state
         curr_state = self.get_empty_state()
@@ -270,7 +267,9 @@ class RNGSyncedTemporalMemory(TemporalMemory):
         self.next_synapse_priority_jitter = 0
 
     def grow_synapses(self, segment, new_synapse_count, prev_state):
+        print(segment, end=' ')
         if len(prev_state.winner_cells) == 0:
+            self.next_synapse_priority_jitter += 1
             return
         
         for candidate in np.argsort(self.synapse_priority_jitter[self.next_synapse_priority_jitter]):
@@ -290,14 +289,19 @@ class RNGSyncedTemporalMemory(TemporalMemory):
         self.next_synapse_priority_jitter += 1
 
     def least_used_cell(self, column):
-        return column * self.cell_dim + self.cell_segments_jitter[column].argmin()
+        cell_segments_jittered = [len(self.cell_segments[cell]) for cell in self.column_cells[column]] + self.cell_segments_jitter[column]
+        return column * self.cell_dim + cell_segments_jittered.argmin()
     
     def best_matching_segment(self, column, prev_state):
         segments = self.segments_for_column(column, prev_state.matching_segments)
         segment_matching_index = [prev_state.matching_segments.index(segment) for segment in segments]
-        return segments[self.matching_segment_potential_jitter[segment_matching_index].argmax()]
+        matching_segment_potential_jittered = [self.num_active_potential_synapses(prev_state, segment) for segment in segments] + self.matching_segment_potential_jitter[segment_matching_index]
+        return segments[matching_segment_potential_jittered.argmax()]
 
     def process(self, sp_state, prev_state=None, learning=True):
+        # print(f'synapse tgt: {list(self.synapse_presynaptic_cell.values())}')
+        # print(f'synapse prm: {list(self.synapse_permanence.values())}')
+
         if prev_state is None:
             prev_state = self.last_state
 
@@ -306,10 +310,26 @@ class RNGSyncedTemporalMemory(TemporalMemory):
             num_winner_segments += max(len(self.segments_for_column(active_column, prev_state.active_segments)), 1)
         self.cell_segments_jitter = np.zeros((self.column_dim, self.cell_dim), dtype=np.float32)
         self.cell_segments_jitter[sp_state.active_column] = np.random.rand(len(sp_state.active_column), self.cell_dim).astype(np.float32)
-        self.matching_segment_potential_jitter = np.random.rand(len(prev_state.matching_segments)).astype(np.float32)
+        print(len(sp_state.active_column), self.cell_dim)
         if len(prev_state.winner_cells) > 0:
             self.synapse_priority_jitter = np.random.rand(num_winner_segments, len(prev_state.winner_cells) + 1).astype(np.float32)
             self.synapse_priority_jitter = self.synapse_priority_jitter[:, :-1]
             self.next_synapse_priority_jitter = 0
 
-        return super().process(sp_state, prev_state=prev_state, learning=learning)
+        w = [sum([len(self.cell_segments[cell]) for cell in self.column_cells[column]]) for column in range(self.column_dim)]
+        cell_segments_jittered = np.array([[len(self.cell_segments[cell]) for cell in self.column_cells[column]] + self.cell_segments_jitter[column] for column in range(self.column_dim)])
+
+        curr_state = super().process(sp_state, prev_state=prev_state, learning=learning)
+        if len(prev_state.winner_cells) > 0:
+            print()
+            print(num_winner_segments, len(prev_state.winner_cells))
+
+        self.matching_segment_potential_jitter = np.random.rand(len(curr_state.matching_segments)).astype(np.float32)
+        print(len(curr_state.matching_segments))
+
+        print(len(self.segment_cell), *[len([1 for permanence in self.synapse_permanence if permanence >= 0.0])] * 2, *w)
+        print(*sorted([cell for cell in curr_state.winner_cells if len(set(self.cell_segments[cell]).intersection(prev_state.matching_segments)) > 0]))
+        y = [cell for cell in curr_state.winner_cells if len(set(self.cell_segments[cell]).intersection(prev_state.matching_segments)) == 0]
+        print(*sorted(y), *cell_segments_jittered[divmod(np.sort(y).astype(int), self.cell_dim)])
+
+        return curr_state

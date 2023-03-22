@@ -118,6 +118,7 @@ class SparseProjection:
         whole_input_to_winner[winner_input] = np.arange(len(winner_input))
 
         edge_priority = np.random.rand(len(learning_output), len(winner_input) + 1).astype(np.float32)
+        print(len(learning_output), len(winner_input))
         np.put_along_axis(edge_priority, whole_input_to_winner[learning_edge_target], np.inf, axis=1)
         edge_priority = edge_priority[:, :-1]
         edge_absent = edge_priority < 1.0
@@ -233,10 +234,15 @@ class PredictiveProjection:
             matching_segment_bundle = self.segment_bundle[state.matching_segment].squeeze(1)
         matching_segment_jittered_potential = state.segment_potential[state.matching_segment].astype(np.float32)
         matching_segment_jittered_potential += np.random.rand(*state.matching_segment.shape)
+        print(*state.matching_segment.shape)
         max_jittered_potential = np.zeros(self.output_dim, dtype=np.float32)
         np.maximum.at(max_jittered_potential, matching_segment_bundle, matching_segment_jittered_potential)
         state.max_jittered_potential = max_jittered_potential
         state.matching_segment_jittered_potential = matching_segment_jittered_potential
+
+    def get_jittered_potential_info(self, state, matching_segment_bundle=None):
+        self.fill_jittered_potential_info(state, matching_segment_bundle=matching_segment_bundle)
+        return state.max_jittered_potential, state.matching_segment_jittered_potential
 
     def process(self, active_input, return_jittered_potential_info=True):
         segment_potential = self.segment_projection.process(active_input=active_input)
@@ -258,16 +264,18 @@ class PredictiveProjection:
             output_learning[learning_output] = True
 
         matching_segment_bundle = self.segment_bundle[prev_state.matching_segment].squeeze(1)
-        self.fill_jittered_potential_info(prev_state, matching_segment_bundle=matching_segment_bundle)
+        max_jittered_potentialself, matching_segment_jittered_potential = self.get_jittered_potential_info(prev_state, matching_segment_bundle=matching_segment_bundle)
         matching_segment_bundle_unpredicted = prev_state.prediction[matching_segment_bundle] < epsilon
-        matching_segment_best_matching = np.abs(prev_state.matching_segment_jittered_potential - prev_state.max_jittered_potential[matching_segment_bundle]) < epsilon
+        matching_segment_best_matching = np.abs(matching_segment_jittered_potential - max_jittered_potentialself[matching_segment_bundle]) < epsilon
         learning_segment = prev_state.matching_segment[output_learning[matching_segment_bundle] & (prev_state.matching_segment_active | (matching_segment_bundle_unpredicted & matching_segment_best_matching))]
         punished_segment = prev_state.matching_segment[output_punishment[matching_segment_bundle]]
 
         unaccounted_output, = np.where(prev_state.max_jittered_potential[learning_output] < epsilon)
         if len(unaccounted_output) > 0:
             unaccounted_output = learning_output[unaccounted_output]
-            replaced_segment, new_segment = self.segment_projection.add_output(len(unaccounted_output), self.segment_matching_threshold)
+            # TODO: tmp
+            # replaced_segment, new_segment = self.segment_projection.add_output(len(unaccounted_output), self.segment_matching_threshold)
+            replaced_segment, new_segment = self.segment_projection.add_output(len(unaccounted_output), -1)
             replaced_segment_bundle, bundle_replaced_segments = np.unique(self.segment_bundle[replaced_segment], return_counts=True)
             self.bundle_segments[replaced_segment_bundle] -= bundle_replaced_segments
             self.bundle_segments[unaccounted_output] += 1
@@ -278,6 +286,7 @@ class PredictiveProjection:
 
         # TODO: tmp
         learning_segment = learning_segment[np.argsort(self.segment_bundle[learning_segment].squeeze(1), kind='stable')]
+        print(*learning_segment, end=' \n')
 
         padded_input_activation = self.segment_projection.pad_input_activation(input_activation)
         self.segment_projection.update(

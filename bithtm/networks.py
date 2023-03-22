@@ -73,7 +73,7 @@ class TemporalMemory:
     def evaluate_cell_best_matching(self, predictive_projection, prev_projection_state, relevant_column, epsilon=1e-8):
         if prev_projection_state is None:
             return np.zeros((len(relevant_column), 1), dtype=np.bool_), np.zeros((len(relevant_column), self.cell_dim), dtype=np.bool_)
-        predictive_projection.ensure_jittered_potential_info(prev_projection_state)
+        predictive_projection.fill_jittered_potential_info(prev_projection_state)
         cell_max_jittered_potential = prev_projection_state.max_jittered_potential.reshape(self.column_dim, self.cell_dim)
         cell_max_jittered_potential = cell_max_jittered_potential[relevant_column]
         column_max_jittered_potential = cell_max_jittered_potential.max(axis=1, keepdims=True)
@@ -89,6 +89,10 @@ class TemporalMemory:
         return cell_least_used
 
     def process(self, sp_state, prev_state=None, learning=True, return_winner_cell=True, epsilon=1e-8):
+        # valid_output_edge = np.where(self.distal_projection.segment_projection.output_edge != self.distal_projection.segment_projection.invalid_output_edge)
+        # print(f'synapse tgt: {self.distal_projection.segment_projection.output_edge[valid_output_edge].squeeze(0).tolist()}')
+        # print(f'synapse prm: {self.distal_projection.segment_projection.output_permanence[valid_output_edge].squeeze(0).tolist()}')
+
         if prev_state is None:
             prev_state = self.last_state
 
@@ -102,6 +106,10 @@ class TemporalMemory:
             active_column_cell_winner = active_column_cell_prediction | (active_column_bursting & np.where(column_matching, cell_best_matching, least_used_cell))
             winner_cell = np.where(active_column_cell_winner)
             winner_cell = (active_column[winner_cell[0]], winner_cell[1])
+            
+            # TODO: TMP
+            argsort = np.argsort(self.flatten_cell(winner_cell))
+            winner_cell = (winner_cell[0][argsort], winner_cell[1][argsort])
 
         if learning:
             column_punishment = np.ones(self.column_dim, dtype=np.bool_)
@@ -117,6 +125,10 @@ class TemporalMemory:
         active_cell = (active_column[active_cell[0]], active_cell[1])
         cell_activation = np.zeros((self.column_dim, self.cell_dim), dtype=np.bool_)
         cell_activation[active_column] = active_column_cell_activation
+
+        # TODO: TMP
+        argsort = np.argsort(self.flatten_cell(active_cell))
+        active_cell = (active_cell[0][argsort], active_cell[1][argsort])
 
         distal_state = self.distal_projection.process(self.flatten_cell(active_cell), return_jittered_potential_info=return_winner_cell)
         cell_prediction = distal_state.prediction.reshape(self.column_dim, self.cell_dim) > epsilon

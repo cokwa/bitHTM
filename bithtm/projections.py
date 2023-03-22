@@ -226,7 +226,7 @@ class PredictiveProjection:
         self.segment_bundle = DynamicArray2D(np.int32, size=(0, 1), growth_exponential=(segment_bundle_growth_exponential, False))
         self.bundle_segments = np.zeros(self.output_dim, dtype=np.int32)
 
-    def ensure_jittered_potential_info(self, state, matching_segment_bundle=None):
+    def fill_jittered_potential_info(self, state, matching_segment_bundle=None):
         if state.max_jittered_potential is not None and state.matching_segment_jittered_potential is not None:
             return
         if matching_segment_bundle is None:
@@ -247,7 +247,7 @@ class PredictiveProjection:
         prediction = bincount(matching_segment_bundle, weights=matching_segment_active, minLength=self.output_dim)
         state = self.State(prediction, segment_potential, matching_segment, matching_segment_activation, matching_segment_active)
         if return_jittered_potential_info:
-            self.ensure_jittered_potential_info(state, matching_segment_bundle=matching_segment_bundle)
+            self.fill_jittered_potential_info(state, matching_segment_bundle=matching_segment_bundle)
         return state
 
     def update(self, prev_state, input_activation, learning_output, output_punishment, winner_input=None, output_learning=None, epsilon=1e-8):
@@ -258,7 +258,7 @@ class PredictiveProjection:
             output_learning[learning_output] = True
 
         matching_segment_bundle = self.segment_bundle[prev_state.matching_segment].squeeze(1)
-        self.ensure_jittered_potential_info(prev_state, matching_segment_bundle=matching_segment_bundle)
+        self.fill_jittered_potential_info(prev_state, matching_segment_bundle=matching_segment_bundle)
         matching_segment_bundle_unpredicted = prev_state.prediction[matching_segment_bundle] < epsilon
         matching_segment_best_matching = np.abs(prev_state.matching_segment_jittered_potential - prev_state.max_jittered_potential[matching_segment_bundle]) < epsilon
         learning_segment = prev_state.matching_segment[output_learning[matching_segment_bundle] & (prev_state.matching_segment_active | (matching_segment_bundle_unpredicted & matching_segment_best_matching))]
@@ -275,6 +275,9 @@ class PredictiveProjection:
             if len(new_segment) > 0:
                 self.segment_bundle.add_rows(np.expand_dims(unaccounted_output[-len(new_segment):], 1))
             learning_segment = np.concatenate([learning_segment, replaced_segment, new_segment])
+
+        # TODO: tmp
+        learning_segment = learning_segment[np.argsort(self.segment_bundle[learning_segment].squeeze(1), kind='stable')]
 
         padded_input_activation = self.segment_projection.pad_input_activation(input_activation)
         self.segment_projection.update(

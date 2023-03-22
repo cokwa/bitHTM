@@ -1,21 +1,7 @@
 from bithtm import HierarchicalTemporalMemory
-from bithtm.reference_implementations import TemporalMemory as ReferenceTemporalMemory
+from bithtm.reference_implementations import RNGSyncedTemporalMemory as ReferenceTemporalMemory
 
 import numpy as np
-
-
-import copy
-class ReferenceHierarchicalTemporalMemory(HierarchicalTemporalMemory):
-    def __init__(self, input_dim, column_dim, cell_dim, active_columns=None):
-        super().__init__(
-            input_dim, column_dim, cell_dim, active_columns=active_columns,
-            temporal_memory=ReferenceTemporalMemory(column_dim, cell_dim)
-        )
-
-    def copy_custom(self, custom_htm):
-        assert self.column_dim == custom_htm.column_dim and self.cell_dim == custom_htm.cell_dim
-        self.spatial_pooler = copy.deepcopy(custom_htm.spatial_pooler)
-        self.temporal_memory.copy_custom(custom_htm.temporal_memory)
 
 
 if __name__ == '__main__':
@@ -35,9 +21,7 @@ if __name__ == '__main__':
     htm = HierarchicalTemporalMemory(input_dim, column_dim, cell_dim)
 
     if use_reference_implementation:
-        ref_htm = ReferenceHierarchicalTemporalMemory(input_dim, column_dim, cell_dim)
-        ref_htm.copy_custom(htm)
-        htm = ref_htm
+        htm.temporal_memory = ReferenceTemporalMemory(column_dim, cell_dim)
 
     import time
     start_time = time.time()
@@ -66,5 +50,7 @@ if __name__ == '__main__':
                 f'correct columns: {corrects:{active_column_string_length}d}, '
                 f'incorrect columns: {incorrects:{column_string_length}d}'
             )
+            print(f'active cells: {(tm_state.active_cell[0] * cell_dim + tm_state.active_cell[1]).tolist()}')
+            print(f'winner cells: {(tm_state.winner_cell[0] * cell_dim + tm_state.winner_cell[1]).tolist()}')
 
     print(f'{time.time() - start_time} seconds.')

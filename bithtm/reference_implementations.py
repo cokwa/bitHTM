@@ -4,10 +4,10 @@ import numpy as np
 class TemporalMemory:
     class State:
         def __init__(self, column_dim, cell_dim):
-            self.active_cells = set()
-            self.winner_cells = set()
-            self.active_segments = set()
-            self.matching_segments = set()
+            self.active_cells = []
+            self.winner_cells = []
+            self.active_segments = []
+            self.matching_segments = []
             self.segment_num_active_potential_synapses = {}
 
             self.active_cell = (np.empty(0, dtype=np.int32), np.empty(0, dtype=np.int32))
@@ -89,8 +89,8 @@ class TemporalMemory:
 
     def activate_predicted_column(self, column, prev_state, curr_state, learning):
         for segment in self.segments_for_column(column, prev_state.active_segments):
-            curr_state.active_cells.add(self.segment_cell[segment])
-            curr_state.winner_cells.add(self.segment_cell[segment])
+            curr_state.active_cells.append(self.segment_cell[segment])
+            curr_state.winner_cells.append(self.segment_cell[segment])
 
             if learning:
                 for synapse in self.segment_synapses[segment]:
@@ -104,7 +104,7 @@ class TemporalMemory:
 
     def burst_column(self, column, prev_state, curr_state, learning):
         for cell in self.column_cells[column]:
-            curr_state.active_cells.add(cell)
+            curr_state.active_cells.append(cell)
 
         if len(self.segments_for_column(column, prev_state.matching_segments)) > 0:
             learning_segment = self.best_matching_segment(column, prev_state)
@@ -114,7 +114,7 @@ class TemporalMemory:
             if learning:
                 learning_segment = self.grow_new_segment(winner_cell)
 
-        curr_state.winner_cells.add(winner_cell)
+        curr_state.winner_cells.append(winner_cell)
 
         if learning:
             for synapse in self.segment_synapses[learning_segment]:
@@ -141,7 +141,7 @@ class TemporalMemory:
         return new_segment
 
     def grow_synapses(self, segment, new_synapse_count, prev_state):
-        candidates = list(prev_state.winner_cells)
+        candidates = prev_state.winner_cells.copy()
         while len(candidates) > 0 and new_synapse_count > 0:
             presynaptic_cell = np.random.choice(candidates)
             candidates.remove(presynaptic_cell)
@@ -187,21 +187,7 @@ class TemporalMemory:
         
         return np.random.choice(least_used_cells)
 
-    def best_matching_segment(self, column, prev_state, choose_random=False):
-        if choose_random:
-            best_score = -1
-            for segment in self.segments_for_column(column, prev_state.matching_segments):
-                best_score = max(best_score, self.num_active_potential_synapses(prev_state, segment))
-
-            best_matching_segments = []
-            for segment in self.segments_for_column(column, prev_state.matching_segments):
-                if self.num_active_potential_synapses(prev_state, segment) == best_score:
-                    best_matching_segments.append(segment)
-            
-            if len(best_matching_segments) == 0:
-                return None
-            return np.random.choice(best_matching_segments)
-        
+    def best_matching_segment(self, column, prev_state):
         best_matching_segment = None
         best_score = -1
         for segment in self.segments_for_column(column, prev_state.matching_segments):
@@ -212,9 +198,10 @@ class TemporalMemory:
         return best_matching_segment
 
     def segments_for_column(self, column, segments):
-        owning_segments = set()
+        segments = set(segments)
+        owning_segments = []
         for cell in self.column_cells[column]:
-            owning_segments.update(segments.intersection(self.cell_segments[cell]))
+            owning_segments += list(segments.intersection(self.cell_segments[cell]))
         return owning_segments
     
     def num_active_potential_synapses(self, state, segment):
@@ -223,6 +210,9 @@ class TemporalMemory:
         return state.segment_num_active_potential_synapses[segment]
 
     def process(self, sp_state, prev_state=None, learning=True):
+        # print(f'synapse tgt: {list(self.synapse_presynaptic_cell.values())}')
+        # print(f'synapse prm: {list(self.synapse_permanence.values())}')
+
         if prev_state is None:
             prev_state = self.last_state
         curr_state = self.get_empty_state()
@@ -252,10 +242,10 @@ class TemporalMemory:
                         num_active_potential += 1
 
             if num_active_connected >= self.segment_activation_threshold:
-                curr_state.active_segments.add(segment)
+                curr_state.active_segments.append(segment)
             
             if num_active_potential >= self.segment_matching_threshold:
-                curr_state.matching_segments.add(segment)
+                curr_state.matching_segments.append(segment)
 
             curr_state.segment_num_active_potential_synapses[segment] = num_active_potential
 
@@ -268,3 +258,58 @@ class TemporalMemory:
 
         self.last_state = curr_state
         return curr_state
+
+
+class RNGSyncedTemporalMemory(TemporalMemory):
+    def __init__(self, column_dim, cell_dim):
+        super().__init__(column_dim, cell_dim)
+
+        self.cell_segments_jitter = None
+        self.matching_segment_potential_jitter = None
+        self.synapse_priority_jitter = None
+        self.next_synapse_priority_jitter = 0
+
+    def grow_synapses(self, segment, new_synapse_count, prev_state):
+        if len(prev_state.winner_cells) == 0:
+            return
+        
+        for candidate in np.argsort(self.synapse_priority_jitter[self.next_synapse_priority_jitter]):
+            presynaptic_cell = prev_state.winner_cells[candidate]
+
+            already_connected = False
+            for synapse in self.segment_synapses[segment]:
+                if self.synapse_presynaptic_cell[synapse] == presynaptic_cell:
+                    already_connected = True
+                    break
+
+            if not already_connected:
+                new_synapse = self.create_new_synapse(segment, presynaptic_cell, self.permanence_initial)
+                new_synapse_count -= 1
+                if new_synapse_count <= 0:
+                    break
+        self.next_synapse_priority_jitter += 1
+
+    def least_used_cell(self, column):
+        return column * self.cell_dim + self.cell_segments_jitter[column].argmin()
+    
+    def best_matching_segment(self, column, prev_state):
+        segments = self.segments_for_column(column, prev_state.matching_segments)
+        segment_matching_index = [prev_state.matching_segments.index(segment) for segment in segments]
+        return segments[self.matching_segment_potential_jitter[segment_matching_index].argmax()]
+
+    def process(self, sp_state, prev_state=None, learning=True):
+        if prev_state is None:
+            prev_state = self.last_state
+
+        num_winner_segments = 0
+        for active_column in sp_state.active_column:
+            num_winner_segments += max(len(self.segments_for_column(active_column, prev_state.active_segments)), 1)
+        self.cell_segments_jitter = np.zeros((self.column_dim, self.cell_dim), dtype=np.float32)
+        self.cell_segments_jitter[sp_state.active_column] = np.random.rand(len(sp_state.active_column), self.cell_dim).astype(np.float32)
+        self.matching_segment_potential_jitter = np.random.rand(len(prev_state.matching_segments)).astype(np.float32)
+        if len(prev_state.winner_cells) > 0:
+            self.synapse_priority_jitter = np.random.rand(num_winner_segments, len(prev_state.winner_cells) + 1).astype(np.float32)
+            self.synapse_priority_jitter = self.synapse_priority_jitter[:, :-1]
+            self.next_synapse_priority_jitter = 0
+
+        return super().process(sp_state, prev_state=prev_state, learning=learning)

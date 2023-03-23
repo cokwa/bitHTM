@@ -4,46 +4,52 @@ from bithtm.reference_implementations import TemporalMemory as ReferenceTemporal
 import numpy as np
 
 
-import argparse
-parser = argparse.ArgumentParser()
-parser.add_argument('--reference', action='store_true')
+class ReferenceHierarchicalTemporalMemory(HierarchicalTemporalMemory):
+    def __init__(self, input_dim, column_dim, cell_dim, active_columns=None):
+        super().__init__(
+            input_dim, column_dim, cell_dim, active_columns=active_columns,
+            temporal_memory=ReferenceTemporalMemory(column_dim, cell_dim)
+        )
 
 
 if __name__ == '__main__':
+    import argparse
+    import time
+
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--input_patterns', type=int, default=100)
+    parser.add_argument('--input_dim', type=int, default=1000)
+    parser.add_argument('--input_density', type=float, default=0.2)
+    parser.add_argument('--input_noise_probability', type=float, default=0.05)
+
+    parser.add_argument('--column_dim', type=int, default=2048)
+    parser.add_argument('--cell_dim', type=int, default=32)
+    parser.add_argument('--use_reference_implementation', action='store_true')
+
     args = parser.parse_args()
 
-    epochs = 100
-    input_patterns = 10
-    input_dim = 1000
-    input_density = 0.2
-    input_noise_probability = 0.05
+    inputs = np.random.rand(args.input_patterns, args.input_dim) < args.input_density
 
-    column_dim = 2048
-    cell_dim = 32
-    use_reference_implementation = args.reference
+    if args.use_reference_implementation:
+        htm = ReferenceHierarchicalTemporalMemory(args.input_dim, args.column_dim, args.cell_dim)
+    else:
+        htm = HierarchicalTemporalMemory(args.input_dim, args.column_dim, args.cell_dim)
 
-    np.random.seed(3407)
-    inputs = np.random.rand(input_patterns, input_dim) < input_density
-    noisy_inputs = inputs ^ (np.random.rand(epochs, input_patterns, input_dim) < input_noise_probability)
-    htm = HierarchicalTemporalMemory(input_dim, column_dim, cell_dim)
-
-    if use_reference_implementation:
-        htm.temporal_memory = ReferenceTemporalMemory(column_dim, cell_dim)
-
-    import time
-    start_time = time.time()
-
-    epoch_string_length = int(np.ceil(np.log10(epochs - 1)))
-    pattern_string_length = int(np.ceil(np.log10(input_patterns - 1)))
-    column_string_length = int(np.ceil(np.log10(column_dim - 1)))
+    epoch_string_length = int(np.ceil(np.log10(args.epochs - 1)))
+    pattern_string_length = int(np.ceil(np.log10(args.input_patterns - 1)))
+    column_string_length = int(np.ceil(np.log10(args.column_dim - 1)))
     active_column_string_length = int(np.ceil(np.log10(htm.spatial_pooler.active_columns - 1)))
 
-    for epoch in range(epochs):
-        # for input_index, curr_input in enumerate(inputs):
-        for input_index, noisy_input in enumerate(noisy_inputs[epoch]):
+    start_time = time.time()
+
+    for epoch in range(args.epochs):
+        for input_index, curr_input in enumerate(inputs):
             prev_column_prediction = htm.temporal_memory.last_state.cell_prediction.max(axis=1)
 
-            # noisy_input = curr_input ^ (np.random.rand(input_dim) < input_noise_probability)
+            noisy_input = curr_input ^ (np.random.rand(args.input_dim) < args.input_noise_probability)
             sp_state, tm_state = htm.process(noisy_input)
 
             burstings = tm_state.active_column_bursting.sum()

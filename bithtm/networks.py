@@ -102,7 +102,7 @@ class TemporalMemory:
             active_column_cell_winner = active_column_cell_prediction | (active_column_bursting & np.where(column_matching, cell_best_matching, least_used_cell))
             winner_cell = np.where(active_column_cell_winner)
             winner_cell = (active_column[winner_cell[0]], winner_cell[1])
-            
+
         if learning:
             column_punishment = np.ones(self.column_dim, dtype=np.bool_)
             column_punishment[active_column] = False

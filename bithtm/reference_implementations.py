@@ -47,7 +47,7 @@ class TemporalMemory:
 
     def copy_custom(self, custom_tm):
         assert self.column_dim == custom_tm.column_dim and self.cell_dim == custom_tm.cell_dim
-        
+
         self.segment_cell = custom_tm.distal_projection.segment_bundle[:].squeeze(1).tolist()
         self.cell_segments = [set() for _ in range(self.column_dim * self.cell_dim)]
         for segment, cell in enumerate(self.segment_cell):
@@ -74,7 +74,7 @@ class TemporalMemory:
         self.last_state.active_segments = empty_state.active_segments
         self.last_state.matching_segments = empty_state.matching_segments
         self.last_state.segment_num_active_potential_synapses = empty_state.segment_num_active_potential_synapses
-        
+
         self.last_state.active_cells = custom_tm.flatten_cell(custom_tm.last_state.active_cell).tolist()
         if custom_tm.last_state.winner_cell is not None:
             self.last_state.winner_cells = custom_tm.flatten_cell(custom_tm.last_state.winner_cell).tolist()
@@ -125,7 +125,7 @@ class TemporalMemory:
 
             new_synapse_count = self.segment_sampling_synapses - self.num_active_potential_synapses(prev_state, learning_segment)
             self.grow_synapses(learning_segment, new_synapse_count, prev_state)
-            
+
     def punish_predicted_column(self, column, prev_state, learning):
         if learning:
             for segment in self.segments_for_column(column, prev_state.matching_segments):
@@ -173,7 +173,7 @@ class TemporalMemory:
         for cell in self.column_cells[column]:
             if len(self.cell_segments[cell]) == fewest_segments:
                 least_used_cells.append(cell)
-        
+
         return np.random.choice(least_used_cells)
 
     def best_matching_segment(self, column, prev_state):
@@ -233,13 +233,13 @@ class TemporalMemory:
                 if self.synapse_presynaptic_cell[synapse] in curr_state.active_cells:
                     if self.synapse_permanence[synapse] >= self.permanence_threshold:
                         num_active_connected += 1
-                    
+
                     if self.synapse_permanence[synapse] >= 0:
                         num_active_potential += 1
 
             if num_active_connected >= self.segment_activation_threshold:
                 curr_state.active_segments.add(segment)
-            
+
             if num_active_potential >= self.segment_matching_threshold:
                 curr_state.matching_segments.add(segment)
 
@@ -287,7 +287,7 @@ class RNGSyncedTemporalMemory(TemporalMemory):
     def least_used_cell(self, column):
         cell_segments_jittered = [len(self.cell_segments[cell]) for cell in self.column_cells[column]] + self.cell_segments_jitter[column]
         return column * self.cell_dim + cell_segments_jittered.argmin()
-    
+
     def best_matching_segment(self, column, prev_state):
         segments = self.segments_for_column(column, prev_state.matching_segments)
         segment_matching_index = [prev_state.matching_segments.index(segment) for segment in segments]
@@ -298,12 +298,14 @@ class RNGSyncedTemporalMemory(TemporalMemory):
         if prev_state is None:
             prev_state = self.last_state
 
-        num_winner_segments = 0
-        for active_column in sp_state.active_column:
-            num_winner_segments += max(len(self.segments_for_column(active_column, prev_state.active_segments)), 1)
         self.cell_segments_jitter = np.zeros((self.column_dim, self.cell_dim), dtype=np.float32)
         self.cell_segments_jitter[sp_state.active_column] = np.random.rand(len(sp_state.active_column), self.cell_dim).astype(np.float32)
+
         if len(prev_state.winner_cells) > 0:
+            num_winner_segments = 0
+            for active_column in sp_state.active_column:
+                num_winner_segments += max(len(self.segments_for_column(active_column, prev_state.active_segments)), 1)
+    
             self.synapse_priority_jitter = np.random.rand(num_winner_segments, len(prev_state.winner_cells) + 1).astype(np.float32)
             self.synapse_priority_jitter = self.synapse_priority_jitter[:, :-1]
             self.next_synapse_priority_jitter = 0

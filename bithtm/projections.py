@@ -106,7 +106,11 @@ class SparseProjection:
             updated_permanence_invalid = updated_permanence < 0.0
             self.output_edges[learning_output] -= (learning_output_edge_valid & updated_permanence_invalid).sum(axis=1, keepdims=True)
             self.output_edge[learning_output] = np.where(updated_permanence_invalid, self.invalid_output_edge, learning_output_edge)
-            self.input_edge[learning_target_input, learning_input_edge] = np.where(updated_permanence_invalid, self.invalid_input_edge, np.expand_dims(1 + learning_output, 1))        
+            self.input_edge[learning_target_input, learning_input_edge] = np.where(updated_permanence_invalid, self.invalid_input_edge, np.expand_dims(1 + learning_output, 1))
+
+        # TODO: tmp
+        self.actives = (learning_output_edge_valid & edge_activation).sum(axis=1)
+        self.inactives = (learning_output_edge_valid & (~edge_activation)).sum(axis=1)
 
         # for curr_learning_output in learning_output:
         #     for curr_learning_output_edge_index, curr_learning_output_edge in enumerate(self.output_edge[curr_learning_output]):
@@ -148,8 +152,10 @@ class SparseProjection:
             return hash
 
         new_synapses = [str(myHash(','.join(np.sort(winner_input[edge_added[i]]).astype(str)))) for i in range(len(learning_output))]
+        actives = [f'{actives}/{inactives}' for actives, inactives in zip(self.actives, self.inactives)]
         # new_synapses = [','.join(np.sort(winner_input[edge_added[i]]).astype(str)) for i in range(len(learning_output))]
-        print(*np.array(list(zip(learning_output.astype(str), output_active_edges.astype(str), added_output_edges, new_synapses))).flatten(), end=' \n')
+        print(padded_input_activation.sum(), (~padded_input_activation[:-1]).sum())
+        print(*np.array(list(zip(learning_output.astype(str), output_active_edges.astype(str), added_output_edges, new_synapses, actives))).flatten(), end=' \n')
         print(len(learning_output), len(winner_input))
 
         added_input_edge_target = np.tile(1 + learning_output, (len(winner_input), 1))

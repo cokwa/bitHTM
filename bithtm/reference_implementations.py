@@ -93,14 +93,20 @@ class TemporalMemory:
             curr_state.winner_cells.append(self.segment_cell[segment])
 
             if learning:
+                actives = 0
+                inactives = 0
+
                 for synapse in self.segment_synapses[segment]:
                     if self.synapse_presynaptic_cell[synapse] in prev_state.active_cells:
                         self.synapse_permanence[synapse] += self.permanence_increment
+                        actives += 1
                     else:
                         self.synapse_permanence[synapse] -= self.permanence_decrement
+                        inactives += 1
 
                 new_synapse_count = self.segment_sampling_synapses - self.num_active_potential_synapses(prev_state, segment)
                 self.grow_synapses(segment, new_synapse_count, prev_state)
+                print(f'{actives}/{inactives}', end=' ')
 
     def burst_column(self, column, prev_state, curr_state, learning):
         for cell in self.column_cells[column]:
@@ -117,14 +123,20 @@ class TemporalMemory:
         curr_state.winner_cells.append(winner_cell)
 
         if learning and learning_segment is not None:
+            actives = 0
+            inactives = 0
+
             for synapse in self.segment_synapses[learning_segment]:
-                if self.synapse_presynaptic_cell[synapse]:
+                if self.synapse_presynaptic_cell[synapse] in prev_state.active_cells:
                     self.synapse_permanence[synapse] += self.permanence_increment
+                    actives += 1
                 else:
                     self.synapse_permanence[synapse] -= self.permanence_decrement
+                    inactives += 1
 
             new_synapse_count = self.segment_sampling_synapses - self.num_active_potential_synapses(prev_state, learning_segment)
             self.grow_synapses(learning_segment, new_synapse_count, prev_state)
+            print(f'{actives}/{inactives}', end=' ')
             
     def punish_predicted_column(self, column, prev_state, learning):
         if learning:
@@ -213,6 +225,9 @@ class TemporalMemory:
         if prev_state is None:
             prev_state = self.last_state
         curr_state = self.get_empty_state()
+
+        if len(prev_state.winner_cells) > 0:
+            print(len(prev_state.active_cells), (self.column_dim * self.cell_dim) - len(prev_state.active_cells))
 
         for column in self.columns:
             if column in sp_state.active_column:

@@ -37,11 +37,17 @@ class SparseProjection:
 
         # TODO: optimize by separately tracking completely empty space of edges per input/output. -> use for adding edges and projection. (max cut-off)
 
+        self.input_nonempty_edges = DynamicArray2D(np.int32, size=(self.input_dim, 1), growth_exponential=(False, False))
         self.input_edge = DynamicArray2D(np.int32, size=(self.input_dim + 1, 0), growth_exponential=(False, edge_growth_exponential), on_grow=self.on_input_edge_grow)
         
         self.output_edges = DynamicArray2D(np.int32, size=(self.output_dim, 1), growth_exponential=(output_growth_exponential, False))
+        self.output_nonempty_edges = DynamicArray2D(np.int32, size=(self.output_dim, 1), growth_exponential=(output_growth_exponential, False))
         self.output_edge = DynamicArray2D(np.int32, size=(self.output_dim, 0), growth_exponential=(output_growth_exponential, edge_growth_exponential), on_grow=self.on_output_edge_grow)
         self.output_permanence = DynamicArray2D(np.float32, size=(self.output_dim, 0), growth_exponential=(output_growth_exponential, edge_growth_exponential), on_grow=self.on_output_permanence_grow)
+
+        self.input_nonempty_edges[:].fill(0)
+        self.output_edges[:].fill(0)
+        self.output_nonempty_edges[:].fill(0)
         
     def on_input_edge_grow(self, new_values, new_size, new_capacity, axis):
         assert axis == 1
@@ -129,7 +135,7 @@ class SparseProjection:
         added_input_edge_target = np.tile(1 + learning_output, (len(winner_input), 1))
         replaced_edges, free_index, src_index, residue_edges, residue_index, src_residue_index = replace_free(
             self.input_edge[winner_input] == self.invalid_input_edge, [self.input_edge[:]], [added_input_edge_target],
-            dest_index=winner_input, src_valid=edge_added.T, return_indices=True, return_residue_info=True
+            dest_index=winner_input, nonempty_lengths=self.input_nonempty_edges[winner_input], src_valid=edge_added.T, return_indices=True, return_residue_info=True
         )
         max_new_input_edges = residue_edges.max(initial=0)
         if max_new_input_edges > 0:

@@ -41,12 +41,47 @@ def nonzero_bounded_2d(value, bounds, lengths=None, return_out_of_bounds=False):
         return nonzero_bounded, nonzero_oob
     return nonzero_bounded
 
-def replace_free(free, dests, srcs, dest_index=None, free_lengths=None, src_valid=None, src_lengths=None, return_indices=False, return_residue_info=False):
+def replace_free(free, dests, srcs, dest_index=None, nonempty_lengths=None, free_lengths=None, src_valid=None, src_lengths=None, return_indices=False, return_residue_info=False):
     assert len(dests[0].shape) == len(free.shape) == len(srcs[0].shape) == 2
     if free_lengths is None:
         free_lengths = free.sum(axis=1)
     if src_lengths is None:
         src_lengths = src_valid.sum(axis=1) if src_valid is not None else srcs[0].shape[1]
+    if nonempty_lengths is not None:
+        bounded_empty_lengths = np.minimum(dests.shape[1] - nonempty_lengths, src_lengths)
+        local_empty_index = arange_concatenated(bounded_empty_lengths)
+        local_empty_index = (local_empty_index[0], nonempty_lengths + local_empty_index[1])
+        empty_index = local_empty_index
+        if dest_index is not None:
+            assert dest_index.shape[0] == free.shape[0]
+            empty_index = (dest_index[local_empty_index[0]], local_empty_index[1])
+        if src_valid is None:
+            src_index = arange_concatenated(bounded_empty_lengths)
+        else:
+            src_index = nonzero_bounded_2d(src_valid, bounded_empty_lengths, lengths=src_lengths)
+        for dest, src in zip(dests, srcs):
+            if np.ndim(src) == 0:
+                dest[empty_index] = src
+                continue
+            dest[empty_index] = src[src_index]
+        src_lengths = src_lengths - bounded_empty_lengths
+        if src_lengths.max() == 0:
+            returned_values = [bounded_empty_lengths]
+            if return_indices:
+                returned_values += [empty_index, src_index]
+            if return_residue_info:
+                returned_values += [
+                    np.zeros(src_lengths.shape, dtype=np.int32),
+                    (np.empty(0, dtype=np.int32), np.empty(0, dtype=np.int32)),
+                    (np.empty(0, dtype=np.int32), np.empty(0, dtype=np.int32))
+                ]
+            return tuple(returned_values)
+        if src_valid is not None:
+            src_valid = src_valid.copy()
+            src_valid[src_index] = False
+        free_lengths = free_lengths - bounded_empty_lengths
+        free = free.copy()
+        free[local_empty_index] = False
     mutually_bounded_lengths = np.minimum(free_lengths, src_lengths)
     free_index = nonzero_bounded_2d(free, mutually_bounded_lengths, lengths=free_lengths)
     if return_residue_info:

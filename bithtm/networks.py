@@ -148,6 +148,10 @@ class TemporalMemory:
         print(*sorted(self.flatten_cell(x)))
         print(*sorted(self.flatten_cell(y)), *_cell_segments_jittered[divmod(np.sort(self.flatten_cell(y)), self.cell_dim)])
 
+        valid_permanences = self.distal_projection.segment_projection.output_permanence[:]
+        valid_permanences = valid_permanences[valid_permanences >= 0.0]
+        print(*[f'{x:.3f}' for x in [np.mean(valid_permanences), np.std(valid_permanences), np.min(valid_permanences, initial=np.inf), np.max(valid_permanences, initial=0), np.median(valid_permanences)]])
+
         curr_state = self.State(active_cell, cell_activation=cell_activation, cell_prediction=cell_prediction, active_column_bursting=active_column_bursting, distal_state=distal_state)
         if learning or return_winner_cell:
             curr_state.winner_cell = winner_cell

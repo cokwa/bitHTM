@@ -267,11 +267,23 @@ class RNGSyncedTemporalMemory(TemporalMemory):
         self.next_synapse_priority_jitter = 0
 
     def grow_synapses(self, segment, new_synapse_count, prev_state):
-        print(segment, end=' ')
-        if len(prev_state.winner_cells) == 0:
+        def myHash(text:str):
+            hash=0
+            for ch in text:
+                hash = ( hash*281  ^ ord(ch)*997) & 0xFFFFFFFF
+            return hash
+
+        print(segment, self.num_active_potential_synapses(prev_state, segment), end=' ')
+        if min(new_synapse_count, len(prev_state.winner_cells)) <= 0:
+            print(0, myHash(''), end=' ')
+            # print(0, '', end=' ')
             self.next_synapse_priority_jitter += 1
             return
         
+        # TMP
+        added_synapses = 0
+        new_synapses = []
+
         for candidate in np.argsort(self.synapse_priority_jitter[self.next_synapse_priority_jitter]):
             presynaptic_cell = prev_state.winner_cells[candidate]
 
@@ -284,8 +296,13 @@ class RNGSyncedTemporalMemory(TemporalMemory):
             if not already_connected:
                 new_synapse = self.create_new_synapse(segment, presynaptic_cell, self.permanence_initial)
                 new_synapse_count -= 1
+                added_synapses += 1
+                new_synapses.append(presynaptic_cell)
                 if new_synapse_count <= 0:
                     break
+
+        print(added_synapses, myHash(','.join(np.sort(new_synapses).astype(str))), end=' ')
+        # print(added_synapses, ','.join(np.sort(new_synapses).astype(str)), end=' ')
         self.next_synapse_priority_jitter += 1
 
     def least_used_cell(self, column):
@@ -327,9 +344,12 @@ class RNGSyncedTemporalMemory(TemporalMemory):
         self.matching_segment_potential_jitter = np.random.rand(len(curr_state.matching_segments)).astype(np.float32)
         print(len(curr_state.matching_segments))
 
-        print(len(self.segment_cell), *[len([1 for permanence in self.synapse_permanence if permanence >= 0.0])] * 2, *w)
+        valid_permanences = [permanence for permanence in self.synapse_permanence.values() if permanence >= 0.0]
+        print(len(self.segment_cell), len(valid_permanences), len(valid_permanences), *w)
         print(*sorted([cell for cell in curr_state.winner_cells if len(set(self.cell_segments[cell]).intersection(prev_state.matching_segments)) > 0]))
         y = [cell for cell in curr_state.winner_cells if len(set(self.cell_segments[cell]).intersection(prev_state.matching_segments)) == 0]
         print(*sorted(y), *cell_segments_jittered[divmod(np.sort(y).astype(int), self.cell_dim)])
+        
+        print(*[f'{x:.3f}' for x in [np.mean(valid_permanences), np.std(valid_permanences), np.min(valid_permanences, initial=np.inf), np.max(valid_permanences, initial=0), np.median(valid_permanences)]])
 
         return curr_state

@@ -4,7 +4,14 @@ from bithtm.reference_implementations import RNGSyncedTemporalMemory as Referenc
 import numpy as np
 
 
+import argparse
+parser = argparse.ArgumentParser()
+parser.add_argument('--reference', action='store_true')
+
+
 if __name__ == '__main__':
+    args = parser.parse_args()
+
     epochs = 100
     input_patterns = 10
     input_dim = 1000
@@ -13,7 +20,7 @@ if __name__ == '__main__':
 
     column_dim = 2048
     cell_dim = 32
-    use_reference_implementation = True
+    use_reference_implementation = args.reference
 
     np.random.seed(3407)
     inputs = np.random.rand(input_patterns, input_dim) < input_density

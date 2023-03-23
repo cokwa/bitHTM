@@ -85,16 +85,10 @@ class TemporalMemory:
         cell_segments = predictive_projection.bundle_segments.reshape(self.column_dim, self.cell_dim)
         cell_segments_jittered = cell_segments[relevant_column].astype(np.float32)
         cell_segments_jittered += np.random.rand(*cell_segments_jittered.shape)
-        print(*cell_segments_jittered.shape)
         cell_least_used = np.abs(cell_segments_jittered - cell_segments_jittered.min(axis=1, keepdims=True)) < epsilon
-        # return cell_least_used
-        return cell_least_used, cell_segments_jittered
+        return cell_least_used
 
     def process(self, sp_state, prev_state=None, learning=True, return_winner_cell=True, epsilon=1e-8):
-        # valid_output_edge = np.where(self.distal_projection.segment_projection.output_edge != self.distal_projection.segment_projection.invalid_output_edge)
-        # print(f'synapse tgt: {self.distal_projection.segment_projection.output_edge[valid_output_edge].squeeze(0).tolist()}')
-        # print(f'synapse prm: {self.distal_projection.segment_projection.output_permanence[valid_output_edge].squeeze(0).tolist()}')
-
         if prev_state is None:
             prev_state = self.last_state
 
@@ -104,24 +98,11 @@ class TemporalMemory:
 
         if learning or return_winner_cell:
             column_matching, cell_best_matching = self.evaluate_cell_best_matching(self.distal_projection, prev_state.distal_state, active_column, epsilon=epsilon)
-            # least_used_cell = self.evaluate_cell_least_used(self.distal_projection, active_column, epsilon=epsilon)
-            least_used_cell, cell_segments_jittered = self.evaluate_cell_least_used(self.distal_projection, active_column, epsilon=epsilon)
+            least_used_cell = self.evaluate_cell_least_used(self.distal_projection, active_column, epsilon=epsilon)
             active_column_cell_winner = active_column_cell_prediction | (active_column_bursting & np.where(column_matching, cell_best_matching, least_used_cell))
             winner_cell = np.where(active_column_cell_winner)
             winner_cell = (active_column[winner_cell[0]], winner_cell[1])
             
-            # TODO: TMP
-            argsort = np.argsort(self.flatten_cell(winner_cell))
-            winner_cell = (winner_cell[0][argsort], winner_cell[1][argsort])
-
-        w = self.distal_projection.bundle_segments.reshape(self.column_dim, self.cell_dim).sum(axis=1)
-        x = np.where(active_column_cell_prediction | (active_column_bursting & column_matching & cell_best_matching))
-        y = np.where(active_column_bursting & (~column_matching) & least_used_cell)
-        x = (active_column[x[0]], x[1])
-        y = (active_column[y[0]], y[1])
-        _cell_segments_jittered = np.zeros((self.column_dim, self.cell_dim))
-        _cell_segments_jittered[sp_state.active_column] = cell_segments_jittered
-
         if learning:
             column_punishment = np.ones(self.column_dim, dtype=np.bool_)
             column_punishment[active_column] = False
@@ -137,20 +118,8 @@ class TemporalMemory:
         cell_activation = np.zeros((self.column_dim, self.cell_dim), dtype=np.bool_)
         cell_activation[active_column] = active_column_cell_activation
 
-        # TODO: TMP
-        argsort = np.argsort(self.flatten_cell(active_cell))
-        active_cell = (active_cell[0][argsort], active_cell[1][argsort])
-
         distal_state = self.distal_projection.process(self.flatten_cell(active_cell), return_jittered_potential_info=return_winner_cell)
         cell_prediction = distal_state.prediction.reshape(self.column_dim, self.cell_dim) > epsilon
-
-        print(len(self.distal_projection.segment_bundle), self.distal_projection.segment_projection.output_edges[:].sum(), ((self.distal_projection.segment_projection.output_edge[:] != self.distal_projection.segment_projection.invalid_output_edge) & (self.distal_projection.segment_projection.output_permanence[:] >= 0.0)).sum(), *w)
-        print(*sorted(self.flatten_cell(x)))
-        print(*sorted(self.flatten_cell(y)), *_cell_segments_jittered[divmod(np.sort(self.flatten_cell(y)), self.cell_dim)])
-
-        valid_permanences = self.distal_projection.segment_projection.output_permanence[:]
-        valid_permanences = valid_permanences[valid_permanences >= 0.0]
-        print(*[f'{x:.3f}' for x in [np.mean(valid_permanences), np.std(valid_permanences), np.min(valid_permanences, initial=np.inf), np.max(valid_permanences, initial=0), np.median(valid_permanences)]])
 
         curr_state = self.State(active_cell, cell_activation=cell_activation, cell_prediction=cell_prediction, active_column_bursting=active_column_bursting, distal_state=distal_state)
         if learning or return_winner_cell:
@@ -173,8 +142,6 @@ class HierarchicalTemporalMemory:
 
         self.spatial_pooler = spatial_pooler or SpatialPooler(input_dim, column_dim, active_columns)
         self.temporal_memory = temporal_memory or TemporalMemory(column_dim, cell_dim)
-        # from .reference_implementations import TemporalMemory as ReferenceTemporalMemory
-        # self.temporal_memory = temporal_memory or ReferenceTemporalMemory(column_dim, cell_dim)
 
     def process(self, input, learning=True):
         sp_state = self.spatial_pooler.process(input, learning=learning)

@@ -108,25 +108,6 @@ class SparseProjection:
             self.output_edge[learning_output] = np.where(updated_permanence_invalid, self.invalid_output_edge, learning_output_edge)
             self.input_edge[learning_target_input, learning_input_edge] = np.where(updated_permanence_invalid, self.invalid_input_edge, np.expand_dims(1 + learning_output, 1))
 
-        # TODO: tmp
-        self.actives = (learning_output_edge_valid & edge_activation).sum(axis=1)
-        self.inactives = (learning_output_edge_valid & (~edge_activation)).sum(axis=1)
-
-        # for curr_learning_output in learning_output:
-        #     for curr_learning_output_edge_index, curr_learning_output_edge in enumerate(self.output_edge[curr_learning_output]):
-        #         if curr_learning_output_edge == self.invalid_output_edge:
-        #             continue
-        #         learning_target_input, learning_input_edge = self.unpack_output_edge(curr_learning_output_edge)
-        #         edge_activation = padded_input_activation[learning_target_input]
-        #         if edge_activation:
-        #             self.output_permanence[curr_learning_output, curr_learning_output_edge_index] += active_edge_permanence_change
-        #         else:
-        #             self.output_permanence[curr_learning_output, curr_learning_output_edge_index] += inactive_edge_permanence_change
-        #         if self.output_permanence[curr_learning_output, curr_learning_output_edge_index] < 0.0:
-        #             self.output_edges[curr_learning_output] -= 1
-        #             self.output_edge[curr_learning_output, curr_learning_output_edge_index] = self.invalid_output_edge
-        #             self.input_edge[learning_target_input, learning_input_edge] = self.invalid_input_edge
-
     def add_edge(self, padded_input_activation, winner_input, learning_output, permanence_initial, min_active_edges):
         learning_edge = self.output_edge[learning_output]
         learning_edge_target = self.get_output_edge_target(learning_edge)
@@ -144,19 +125,6 @@ class SparseProjection:
         np.put_along_axis(edge_prioritized, np.argsort(edge_priority, axis=1), np.expand_dims(np.arange(len(winner_input)), 0) < np.expand_dims(added_output_edges, 1), axis=1)
         edge_added = edge_absent & edge_prioritized
         added_output_edges = edge_added.sum(axis=1)
-
-        def myHash(text:str):
-            hash=0
-            for ch in text:
-                hash = ( hash*281  ^ ord(ch)*997) & 0xFFFFFFFF
-            return hash
-
-        new_synapses = [str(myHash(','.join(np.sort(winner_input[edge_added[i]]).astype(str)))) for i in range(len(learning_output))]
-        actives = [f'{actives}/{inactives}' for actives, inactives in zip(self.actives, self.inactives)]
-        # new_synapses = [','.join(np.sort(winner_input[edge_added[i]]).astype(str)) for i in range(len(learning_output))]
-        print(padded_input_activation.sum(), (~padded_input_activation[:-1]).sum())
-        print(*np.array(list(zip(learning_output.astype(str), output_active_edges.astype(str), added_output_edges, new_synapses, actives))).flatten(), end=' \n')
-        print(len(learning_output), len(winner_input))
 
         added_input_edge_target = np.tile(1 + learning_output, (len(winner_input), 1))
         replaced_edges, free_index, src_index, residue_edges, residue_index, src_residue_index = replace_free(
@@ -265,7 +233,6 @@ class PredictiveProjection:
             matching_segment_bundle = self.segment_bundle[state.matching_segment].squeeze(1)
         matching_segment_jittered_potential = state.segment_potential[state.matching_segment].astype(np.float32)
         matching_segment_jittered_potential += np.random.rand(*state.matching_segment.shape)
-        print(*state.matching_segment.shape)
         max_jittered_potential = np.zeros(self.output_dim, dtype=np.float32)
         np.maximum.at(max_jittered_potential, matching_segment_bundle, matching_segment_jittered_potential)
         state.max_jittered_potential = max_jittered_potential
@@ -304,9 +271,7 @@ class PredictiveProjection:
         unaccounted_output, = np.where(prev_state.max_jittered_potential[learning_output] < epsilon)
         if len(unaccounted_output) > 0:
             unaccounted_output = learning_output[unaccounted_output]
-            # TODO: tmp
-            # replaced_segment, new_segment = self.segment_projection.add_output(len(unaccounted_output), self.segment_matching_threshold)
-            replaced_segment, new_segment = self.segment_projection.add_output(len(unaccounted_output), -1)
+            replaced_segment, new_segment = self.segment_projection.add_output(len(unaccounted_output), self.segment_matching_threshold)
             replaced_segment_bundle, bundle_replaced_segments = np.unique(self.segment_bundle[replaced_segment], return_counts=True)
             self.bundle_segments[replaced_segment_bundle] -= bundle_replaced_segments
             self.bundle_segments[unaccounted_output] += 1
@@ -314,10 +279,6 @@ class PredictiveProjection:
             if len(new_segment) > 0:
                 self.segment_bundle.add_rows(np.expand_dims(unaccounted_output[-len(new_segment):], 1))
             learning_segment = np.concatenate([learning_segment, replaced_segment, new_segment])
-
-        # TODO: tmp
-        learning_segment = learning_segment[np.argsort(self.segment_bundle[learning_segment].squeeze(1), kind='stable')]
-        # print(*learning_segment, end=' \n')
 
         padded_input_activation = self.segment_projection.pad_input_activation(input_activation)
         self.segment_projection.update(

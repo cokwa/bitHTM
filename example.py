@@ -1,5 +1,5 @@
 from bithtm import HierarchicalTemporalMemory
-from bithtm.reference_implementations import RNGSyncedTemporalMemory as ReferenceTemporalMemory
+from bithtm.reference_implementations import TemporalMemory as ReferenceTemporalMemory
 
 import numpy as np
 
@@ -57,7 +57,5 @@ if __name__ == '__main__':
                 f'correct columns: {corrects:{active_column_string_length}d}, '
                 f'incorrect columns: {incorrects:{column_string_length}d}'
             )
-            # print(f'active cells: {(tm_state.active_cell[0] * cell_dim + tm_state.active_cell[1]).tolist()}')
-            print(f'winner cells: {(tm_state.winner_cell[0] * cell_dim + tm_state.winner_cell[1]).tolist()}')
 
     print(f'{time.time() - start_time} seconds.')

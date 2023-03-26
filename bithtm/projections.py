@@ -13,7 +13,7 @@ class DenseProjection:
         self.permanence_increment = permanence_increment
         self.permanence_decrement = permanence_decrement
 
-        self.permanence = np.random.randn(output_dim, input_dim) * permanence_std + permanence_mean
+        self.permanence = np.random.randn(output_dim, input_dim).astype(np.float32) * permanence_std + permanence_mean
 
     def process(self, input_activation):
         weight = self.permanence >= self.permanence_threshold
@@ -22,6 +22,64 @@ class DenseProjection:
 
     def update(self, input_activation, learning_output):
         self.permanence[learning_output] += input_activation * (self.permanence_increment + self.permanence_decrement) - self.permanence_decrement
+
+
+# TODO: optimize. avoid fancy indexing. use masking for fractional strides instead.
+class LocalProjection:
+    def __init__(
+        self, input_dim, output_dim, window_size, flattened=True,
+        permanence_mean=0.0, permanence_std=0.1,
+        permanence_threshold=0.0, permanence_increment=0.03, permanence_decrement=0.015
+    ):
+        assert type(input_dim) == type(output_dim) == type(window_size)
+        if type(input_dim) == int:
+            input_dim = (input_dim, )
+            output_dim = (output_dim, )
+            window_size = (window_size, )
+        assert len(input_dim) == len(output_dim) == len(window_size)
+        assert (np.array(window_size) <= np.array(input_dim)).all()
+
+        stride = (np.array(input_dim) - np.array(window_size)) / (np.array(output_dim) - 1)
+        assert (stride <= np.array(window_size)).all()
+
+        target = np.meshgrid(
+            *(
+                [(np.arange(output_dim[axis]) * stride[axis]).round().astype(np.int32) for axis in range(len(output_dim))] +
+                [np.arange(window_size[axis], dtype=np.int32) for axis in range(len(output_dim))]
+            ),
+            indexing='ij'
+        )
+        target = tuple(target[axis] + target[len(output_dim) + axis] for axis in range(len(output_dim)))
+
+        self.input_dim = tuple(input_dim)
+        self.output_dim = tuple(output_dim)
+        self.window_size = tuple(window_size)
+        self.stride = tuple(stride)
+        self.flattened = flattened
+
+        self.permanence_threshold = permanence_threshold
+        self.permanence_increment = permanence_increment
+        self.permanence_decrement = permanence_decrement
+
+        self.permanence = np.random.randn(*self.output_dim, *self.window_size) * permanence_std + permanence_mean
+        self.target = target
+
+    def process(self, input_activation):
+        input_activation = input_activation.reshape(self.input_dim)
+        weight = self.permanence >= self.permanence_threshold
+        overlaps = (weight & input_activation[self.target]).sum(axis=tuple(range(-len(self.window_size), 0)))
+        if self.flattened:
+            overlaps = overlaps.flatten()
+        return overlaps
+
+    def update(self, input_activation, learning_output):
+        if not self.flattened and type(learning_output) == tuple:
+            assert len(learning_output) == len(self.output_dim)
+            learning_output = sum(axis_learning_output * np.prod(self.output_dim[axis + 1:]) for axis, axis_learning_output in enumerate(learning_output))
+        input_activation = input_activation.reshape(self.input_dim)
+        permanence = self.permanence.reshape(-1, *self.permanence.shape[len(self.output_dim):])
+        target = tuple(axis_target.reshape(permanence.shape)[learning_output] for axis_target in self.target)
+        permanence[learning_output] += input_activation[target] * (self.permanence_increment + self.permanence_decrement) - self.permanence_decrement
 
 
 class SparseProjection:

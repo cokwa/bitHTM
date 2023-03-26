@@ -23,13 +23,13 @@ class SpatialPooler:
         self.boosting = boosting or ExponentialBoosting(column_dim, active_columns)
         self.inhibition = inhibition or GlobalInhibition(active_columns)
 
-    def process(self, input, learning=True):
-        overlaps = self.proximal_projection.process(input)
+    def process(self, input_activation, learning=True):
+        overlaps = self.proximal_projection.process(input_activation)
         boosted_overlaps = self.boosting.process(overlaps)
         active_column = self.inhibition.process(boosted_overlaps)
 
         if learning:
-            self.proximal_projection.update(input, active_column)
+            self.proximal_projection.update(input_activation, active_column)
         self.boosting.update(active_column)
 
         return self.State(active_column, overlaps=overlaps, boosted_overlaps=boosted_overlaps)
@@ -136,9 +136,9 @@ class HierarchicalTemporalMemory:
         if active_columns is None:
             active_columns = round(column_dim * 0.02)
 
+        self.input_dim = input_dim
         self.column_dim = column_dim
         self.cell_dim = cell_dim
-        self.active_columns = active_columns
 
         self.spatial_pooler = spatial_pooler or SpatialPooler(input_dim, column_dim, active_columns)
         self.temporal_memory = temporal_memory or TemporalMemory(column_dim, cell_dim)

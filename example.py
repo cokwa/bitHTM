@@ -31,9 +31,6 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    # TODO: tmp
-    np.random.seed(3407)
-
     inputs = np.random.rand(args.input_patterns, args.input_dim) < args.input_density
 
     if args.use_reference_implementation:
